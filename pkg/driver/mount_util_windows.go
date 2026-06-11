@@ -166,8 +166,19 @@ func isCorruptedMount(err error) bool {
 	return false
 }
 
-// isPathMounted reports whether path is currently a mount point
-// (reparse point).
+// isPathMounted reports whether path is currently a LIVE mount point:
+// a reparse point whose target filesystem still responds. A dangling
+// reparse point left behind by a killed weed.exe (WinFsp directory
+// mount or staging symlink to a dead UNC share) is not a live mount;
+// treating it as one would block health-monitor recovery forever.
+// Cleanup on Windows is os.Remove (never recursive), so no data can be
+// deleted through a live mount either way.
 func isPathMounted(path string) (bool, error) {
-	return isReparsePoint(path), nil
+	if !isReparsePoint(path) {
+		return false, nil
+	}
+	if _, err := os.ReadDir(path); err != nil {
+		return false, nil
+	}
+	return true, nil
 }
