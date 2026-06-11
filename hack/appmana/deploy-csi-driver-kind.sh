@@ -555,7 +555,11 @@ $pull_secrets_block
             - -Command
             - >-
               if (-not (Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) {
-              Start-Process msiexec -Wait -ArgumentList '/i',"\$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi",'/qn','INSTALLLEVEL=1000' } ;
+              Copy-Item "\$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" 'C:\Windows\Temp\winfsp.msi' -Force ;
+              \$p = Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000' ;
+              Remove-Item 'C:\Windows\Temp\winfsp.msi' -Force -ErrorAction SilentlyContinue ;
+              if (\$p.ExitCode -ne 0) { Write-Error ('winfsp msi install failed with exit code ' + \$p.ExitCode) ; exit 1 } } ;
+              if (-not (Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { Write-Error 'winfsp registry key still missing after install' ; exit 1 } ;
               New-Item -ItemType Directory -Force -Path C:\var\lib\seaweedfs-mount, C:\var\cache\seaweedfs | Out-Null
       containers:
         - name: seaweedfs-mount
