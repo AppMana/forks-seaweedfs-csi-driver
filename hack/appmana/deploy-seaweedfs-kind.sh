@@ -28,7 +28,7 @@ LAB_CONTEXT="${LAB_CONTEXT:-kind-appmana-calico}"
 
 NAMESPACE="seaweedfs-test"
 IMAGE="chrislusf/seaweedfs:4.23_large_disk"
-SEAWEEDFS_NODE="${SEAWEEDFS_NODE:-kind-worker2}"
+SEAWEEDFS_NODE="${SEAWEEDFS_NODE:-appmana-calico-worker2}"
 PROBE_IMAGE="${PROBE_IMAGE:-busybox:1.36}"
 FILER=""
 

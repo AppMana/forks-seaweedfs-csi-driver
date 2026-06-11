@@ -69,17 +69,12 @@ else
   missing+=("csinode $WINDOWS_NODE lists seaweedfs-csi-driver")
 fi
 
+# The probe must be a single line: the Windows default ssh shell is cmd.exe,
+# which truncates a multiline command at the first newline, leaving PowerShell
+# with an empty -Command (silent exit 0, empty output, false "missing" result).
 status=$(
   ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 "$SSH_USER@$WINDOWS_HOST" \
-    'powershell -NoProfile -Command "
-      $ErrorActionPreference = \"SilentlyContinue\"
-      $launcher = (Get-Service WinFsp.Launcher).Status -eq \"Running\"
-      $mountsock = Test-Path C:\var\lib\seaweedfs-mount\seaweedfs-mount.sock
-      $csisock = Test-Path C:\var\lib\kubelet\plugins\seaweedfs-csi-driver\csi.sock
-      \"winfsp_launcher=$launcher\"
-      \"mount_sock=$mountsock\"
-      \"csi_sock=$csisock\"
-    "' | tr -d '\r' || true
+    'powershell -NoProfile -Command "$ErrorActionPreference = \"SilentlyContinue\"; $launcher = (Get-Service WinFsp.Launcher).Status -eq \"Running\"; $mountsock = Test-Path C:\var\lib\seaweedfs-mount\seaweedfs-mount.sock; $csisock = Test-Path C:\var\lib\kubelet\plugins\seaweedfs-csi-driver\csi.sock; \"winfsp_launcher=$launcher\"; \"mount_sock=$mountsock\"; \"csi_sock=$csisock\""' | tr -d '\r' || true
 )
 
 echo "$status"

@@ -146,8 +146,8 @@ if [[ "${args[0]:-}" == "get" && "${args[1]:-}" == "node" ]]; then
   if [[ "$joined" == *"InternalIP"* ]]; then
     case "$node" in
       appmana-000) echo -n "10.2.0.180 2001:db8::180" ;;
-      kind-worker) echo -n "172.21.0.3" ;;
-      kind-worker2) echo -n "172.21.0.2" ;;
+      appmana-calico-worker) echo -n "172.21.0.3" ;;
+      appmana-calico-worker2) echo -n "172.21.0.2" ;;
       *) echo -n "172.21.0.9" ;;
     esac
     exit 0
@@ -583,7 +583,7 @@ assert_log_contains "calico-preflight"
 assert_log_contains "deploy-seaweedfs --namespace seaweedfs-test --image chrislusf/seaweedfs:4.23_large_disk"
 assert_log_contains "deploy-csi --namespace seaweedfs-csi --csi-image ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.1 --mount-image ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.1 --filer 172.21.0.2:8888"
 assert_log_contains "csi-preflight NAMESPACE=seaweedfs-csi WINDOWS_NODE=appmana-000"
-assert_log_contains "health --namespace seaweedfs-csi-test --storage-class seaweedfs-storage --linux-node kind-worker --windows-node appmana-000 --windows-exec hcsdiag"
+assert_log_contains "health --namespace seaweedfs-csi-test --storage-class seaweedfs-storage --linux-node appmana-calico-worker --windows-node appmana-000 --windows-exec hcsdiag"
 
 : > "$LOG"
 if RESILIENCE=true FORWARDING_SCRIPT="$FORWARDING_STUB" PREFLIGHT_SCRIPT="$PREFLIGHT_STUB" \

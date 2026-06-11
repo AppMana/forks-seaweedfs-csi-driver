@@ -34,7 +34,7 @@ LAB_CONTEXT="${LAB_CONTEXT:-kind-appmana-calico}"
 
 NAMESPACE="seaweedfs-csi-test"
 STORAGE_CLASS="seaweedfs-storage"
-LINUX_NODE="kind-worker"
+LINUX_NODE="appmana-calico-worker"
 WINDOWS_NODE="appmana-000"
 WINDOWS_EXEC="hcsdiag"
 WINDOWS_SSH_USER="${WINDOWS_SSH_USER:-administrator}"
