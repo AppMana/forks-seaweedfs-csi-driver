@@ -120,7 +120,11 @@ spec:
         - server
         - -filer
         - -master.volumeSizeLimitMB=64
-        - -volume.max=10
+        # Every CSI volume is its own collection and grabs ~7 volume
+        # slots on first write; 10 slots exhaust after a single run and
+        # subsequent writes silently produce zero-byte files. 100 slots
+        # (max ~6.4GB) survive repeated runs.
+        - -volume.max=100
       ports:
         - containerPort: 9333
         - containerPort: 19333

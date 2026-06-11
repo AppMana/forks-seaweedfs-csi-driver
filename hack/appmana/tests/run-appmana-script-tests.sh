@@ -322,7 +322,7 @@ else
 fi
 assert_log_contains "image: chrislusf/seaweedfs:4.23_large_disk"
 assert_log_contains "- -master.volumeSizeLimitMB=64"
-assert_log_contains "- -volume.max=10"
+assert_log_contains "- -volume.max=100"
 assert_log_contains "hostNetwork: true"
 assert_log_contains "containerPort: 18888"
 assert_log_contains "kubectl wait -n seaweedfs-test --for=condition=Ready pod/seaweedfs --timeout=300s"
