@@ -40,6 +40,7 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 		unmountFn:        unmountVolume,
 		bindMountFn:      defaultBindMount,
 	}
+	ns.recoverStagedVolumesFromDisk(n.StagingScanDir)
 	ns.startHealthMonitor(defaultHealthCheckInterval)
 	return ns
 }

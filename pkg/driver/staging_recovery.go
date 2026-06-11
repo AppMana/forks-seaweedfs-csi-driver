@@ -1,0 +1,80 @@
+package driver
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+
+	"github.com/seaweedfs/seaweedfs/weed/glog"
+)
+
+// kubeletVolData is the subset of kubelet's vol_data.json written next
+// to each CSI staging (globalmount) directory.
+type kubeletVolData struct {
+	DriverName   string `json:"driverName"`
+	VolumeHandle string `json:"volumeHandle"`
+}
+
+// recoverStagedVolumesFromDisk rebuilds the in-memory volume map from
+// kubelet's staging directories after a plugin restart. Without this, a
+// staged volume whose weed mount later dies is invisible to the health
+// monitor and is never re-staged: kubelet does not call NodeStageVolume
+// again while it believes the volume is staged, so the volume stays
+// broken until its pods are deleted.
+//
+// scanDir is the kubelet CSI plugins directory, e.g.
+// /var/lib/kubelet/plugins/kubernetes.io/csi; the per-volume layout
+// underneath is <scanDir>/<driverName>/<hash>/{globalmount,vol_data.json}.
+//
+// Volumes recovered this way get an empty (non-nil) volume context: a
+// dynamically provisioned volume re-mounts identically from defaults
+// derived from its volume handle. Statically provisioned volumes with a
+// custom "path"/"collection" context cannot be fully reconstructed from
+// vol_data.json; for those the health monitor logs the re-stage and the
+// mount falls back to handle-derived defaults.
+func (ns *NodeServer) recoverStagedVolumesFromDisk(scanDir string) {
+	if scanDir == "" {
+		return
+	}
+	base := filepath.Join(scanDir, ns.Driver.name)
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			glog.Warningf("staging recovery: cannot read %s: %v", base, err)
+		}
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		volDir := filepath.Join(base, e.Name())
+		data, err := os.ReadFile(filepath.Join(volDir, "vol_data.json"))
+		if err != nil {
+			glog.Warningf("staging recovery: skipping %s: %v", volDir, err)
+			continue
+		}
+		var vd kubeletVolData
+		if err := json.Unmarshal(data, &vd); err != nil || vd.VolumeHandle == "" {
+			glog.Warningf("staging recovery: skipping %s: unusable vol_data.json (%v)", volDir, err)
+			continue
+		}
+		if vd.DriverName != "" && vd.DriverName != ns.Driver.name {
+			continue
+		}
+		if _, loaded := ns.volumes.Load(vd.VolumeHandle); loaded {
+			continue
+		}
+		stagingPath := filepath.Join(volDir, "globalmount")
+		vol := ns.rebuildVolumeFromStaging(vd.VolumeHandle, stagingPath)
+		// recoverVolume refuses nil contexts; an empty context lets the
+		// health monitor re-stage with handle-derived defaults.
+		vol.volContext = map[string]string{}
+		ns.volumes.Store(vd.VolumeHandle, vol)
+		if ns.checkHealth(stagingPath) {
+			glog.Infof("staging recovery: volume %s healthy at %s, tracking", vd.VolumeHandle, stagingPath)
+		} else {
+			glog.Warningf("staging recovery: volume %s unhealthy at %s, health monitor will re-stage", vd.VolumeHandle, stagingPath)
+		}
+	}
+}

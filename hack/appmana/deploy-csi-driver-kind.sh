@@ -439,6 +439,7 @@ $pull_secrets_block
             - --mountEndpoint=\$(MOUNT_ENDPOINT)
             - --cacheDir=/var/cache/seaweedfs
             - --cacheCapacityMB=$CACHE_CAPACITY_MB
+            - --stagingScanDir=$KUBELET_ROOT_LINUX/plugins/kubernetes.io/csi
             - --components=node
           env:
             - name: CSI_ENDPOINT
@@ -645,6 +646,7 @@ $pull_secrets_block
             - --mountEndpoint=\$(MOUNT_ENDPOINT)
             - --cacheDir=C:\var\cache\seaweedfs
             - --cacheCapacityMB=$CACHE_CAPACITY_MB
+            - --stagingScanDir=$win_root\plugins\kubernetes.io\csi
             - --components=node
           env:
             - name: CSI_ENDPOINT

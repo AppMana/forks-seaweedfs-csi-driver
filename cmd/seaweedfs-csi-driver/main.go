@@ -31,6 +31,7 @@ var (
 	gidMap            = flag.String("map.gid", "", "map local gid to gid on filer, comma-separated <local_gid>:<filer_gid>")
 	dataCenter        = flag.String("dataCenter", "", "dataCenter this node is running in (locality-definition)")
 	dataLocalityStr   = flag.String("dataLocality", "", "which volume-nodes pods will use for activity (one-of: 'write_preferLocalDc'). Requires used locality-definitions to be set")
+	stagingScanDir    = flag.String("stagingScanDir", "", "kubelet CSI plugins directory (<kubelet root>/plugins/kubernetes.io/csi) scanned at node startup to rediscover staged volumes; empty disables the scan")
 	dataLocality      datalocality.DataLocality
 )
 
@@ -95,6 +96,7 @@ func main() {
 	drv.GidMap = *gidMap
 	drv.DataCenter = *dataCenter
 	drv.DataLocality = dataLocality
+	drv.StagingScanDir = *stagingScanDir
 
 	drv.Run()
 }

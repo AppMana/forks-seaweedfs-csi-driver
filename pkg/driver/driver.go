@@ -52,6 +52,11 @@ type SeaweedFsDriver struct {
 
 	RunNode       bool
 	RunController bool
+
+	// StagingScanDir, when set, is the kubelet CSI plugins directory
+	// (<kubelet root>/plugins/kubernetes.io/csi) scanned at node startup
+	// to rediscover already-staged volumes (see recoverStagedVolumesFromDisk).
+	StagingScanDir string
 }
 
 func NewSeaweedFsDriver(name, filer, nodeID, endpoint, mountEndpoint string, enableAttacher bool) *SeaweedFsDriver {
