@@ -1,5 +1,5 @@
 # VERSION=latest make push
-.PHONY: build container container-csi container-mount push push-csi push-mount clean deps
+.PHONY: build build-windows container container-csi container-mount container-windows-csi container-windows-mount push push-csi push-mount clean deps
 
 REGISTRY_NAME ?= chrislusf
 DRIVER_IMAGE_NAME ?= seaweedfs-csi-driver
@@ -15,6 +15,10 @@ MOUNT_BINARY := $(OUTPUT_DIR)/seaweedfs-mount
 DRIVER_IMAGE_TAG := $(REGISTRY_NAME)/$(DRIVER_IMAGE_NAME):$(VERSION)
 MOUNT_IMAGE_TAG := $(REGISTRY_NAME)/$(MOUNT_IMAGE_NAME):$(VERSION)
 
+# Output type for docker buildx (Windows images cannot be loaded into a
+# Linux docker engine; use OUTPUT_TYPE=registry to push).
+OUTPUT_TYPE ?= docker
+
 deps:
 	go mod tidy
 
@@ -29,6 +33,11 @@ $(DRIVER_BINARY): | $(OUTPUT_DIR)
 $(MOUNT_BINARY): | $(OUTPUT_DIR)
 	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '$(LDFLAGS)' -o $@ ./cmd/seaweedfs-mount/main.go
 
+build-windows: | $(OUTPUT_DIR)
+	mkdir -p $(OUTPUT_DIR)/windows
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags '$(LDFLAGS)' -o $(OUTPUT_DIR)/windows/seaweedfs-csi-driver.exe ./cmd/seaweedfs-csi-driver
+	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags '$(LDFLAGS)' -o $(OUTPUT_DIR)/windows/seaweedfs-mount.exe ./cmd/seaweedfs-mount
+
 container: container-csi container-mount
 
 container-csi: $(DRIVER_BINARY)
@@ -36,6 +45,16 @@ container-csi: $(DRIVER_BINARY)
 
 container-mount: $(MOUNT_BINARY)
 	docker build -t $(MOUNT_IMAGE_TAG) -f cmd/seaweedfs-mount/Dockerfile.dev .
+
+container-windows-csi:
+	docker buildx build --output=type=$(OUTPUT_TYPE) --platform=windows/amd64 \
+		--provenance=false --sbom=false \
+		-t $(DRIVER_IMAGE_TAG)-windows -f cmd/seaweedfs-csi-driver/Dockerfile.Windows .
+
+container-windows-mount:
+	docker buildx build --output=type=$(OUTPUT_TYPE) --platform=windows/amd64 \
+		--provenance=false --sbom=false \
+		-t $(MOUNT_IMAGE_TAG)-windows -f cmd/seaweedfs-mount/Dockerfile.Windows .
 
 push: push-csi push-mount
 

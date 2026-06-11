@@ -3,6 +3,8 @@ package driver
 import (
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
@@ -62,7 +64,12 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 	}
 
 	if proto == "unix" {
-		addr = "/" + addr
+		// Historically "unix://tmp/foo.sock" was accepted and rooted at
+		// "/tmp/foo.sock". Keep that behavior, but leave already-absolute
+		// addresses (including Windows paths like "C:\...") untouched.
+		if !strings.HasPrefix(addr, "/") && !filepath.IsAbs(addr) {
+			addr = "/" + addr
+		}
 		if err := os.Remove(addr); err != nil && !os.IsNotExist(err) {
 			glog.Fatalf("Failed to remove %s, error: %s", addr, err.Error())
 		}

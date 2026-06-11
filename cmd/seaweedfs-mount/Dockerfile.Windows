@@ -1,0 +1,52 @@
+# Windows HostProcess image for the seaweedfs mount server.
+# Cross-compiled in a Linux builder stage; build with:
+#   docker buildx build --platform windows/amd64 --provenance=false --sbom=false \
+#     -f cmd/seaweedfs-mount/Dockerfile.Windows .
+
+ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
+ARG SEAWEEDFS_COMMIT=appmana-4.23-large-disk-winfsp
+ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
+ARG GO_FUSE_BRANCH=appmana/windows-compile
+ARG WINFSP_MSI_URL=https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi
+ARG WINFSP_MSI_SHA256=073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a
+
+FROM --platform=linux/amd64 golang:1.25 AS builder
+
+ARG SEAWEEDFS_REPO
+ARG SEAWEEDFS_COMMIT
+ARG GO_FUSE_REPO
+ARG GO_FUSE_BRANCH
+ARG WINFSP_MSI_URL
+ARG WINFSP_MSI_SHA256
+
+# The seaweedfs fork's go.mod contains:
+#   replace github.com/seaweedfs/go-fuse/v2 => ../forks-go-fuse
+# so the go-fuse fork must be checked out as a sibling directory.
+RUN git clone --branch ${GO_FUSE_BRANCH} --single-branch ${GO_FUSE_REPO} /src/forks-go-fuse
+RUN git clone ${SEAWEEDFS_REPO} /src/forks-seaweedfs \
+    && cd /src/forks-seaweedfs \
+    && git checkout ${SEAWEEDFS_COMMIT}
+
+# Build weed.exe with WinFsp support.
+RUN cd /src/forks-seaweedfs/weed \
+    && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags 5BytesOffset -ldflags="-s -w" -o /out/weed.exe
+
+# Build seaweedfs-mount.exe from the build context.
+WORKDIR /go/src/github.com/seaweedfs/seaweedfs-csi-driver
+COPY . .
+RUN CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /out/seaweedfs-mount.exe ./cmd/seaweedfs-mount
+
+# Fetch the WinFsp installer with a pinned URL and checksum. The node
+# bootstrap installs it on the host before the mount server runs.
+RUN curl -fsSL -o /out/winfsp.msi ${WINFSP_MSI_URL} \
+    && echo "${WINFSP_MSI_SHA256}  /out/winfsp.msi" | sha256sum -c -
+
+FROM mcr.microsoft.com/oss/kubernetes/windows-host-process-containers-base-image:v1.0.0
+
+COPY --from=builder /out/weed.exe /weed.exe
+COPY --from=builder /out/seaweedfs-mount.exe /seaweedfs-mount.exe
+COPY --from=builder /out/winfsp.msi /winfsp.msi
+
+ENV PATH="C:\Windows\system32;C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;"
+USER ContainerAdministrator
+ENTRYPOINT ["/seaweedfs-mount.exe"]

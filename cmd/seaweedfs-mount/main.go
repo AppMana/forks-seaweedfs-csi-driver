@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -34,6 +35,10 @@ func main() {
 
 	if err := os.Remove(address); err != nil && !errors.Is(err, os.ErrNotExist) {
 		glog.Fatalf("removing existing socket: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(address), 0755); err != nil {
+		glog.Fatalf("creating socket directory: %v", err)
 	}
 
 	listener, err := net.Listen("unix", address)

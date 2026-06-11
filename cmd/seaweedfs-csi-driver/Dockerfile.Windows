@@ -1,0 +1,18 @@
+# Windows HostProcess image for the seaweedfs CSI node plugin.
+# Cross-compiled in a Linux builder stage; build with:
+#   docker buildx build --platform windows/amd64 --provenance=false --sbom=false \
+#     -f cmd/seaweedfs-csi-driver/Dockerfile.Windows .
+
+FROM --platform=linux/amd64 golang:1.25 AS builder
+
+WORKDIR /go/src/github.com/seaweedfs/seaweedfs-csi-driver
+COPY . .
+RUN CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o /out/seaweedfs-csi-driver.exe ./cmd/seaweedfs-csi-driver
+
+FROM mcr.microsoft.com/oss/kubernetes/windows-host-process-containers-base-image:v1.0.0
+
+COPY --from=builder /out/seaweedfs-csi-driver.exe /seaweedfs-csi-driver.exe
+
+ENV PATH="C:\Windows\system32;C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;"
+USER ContainerAdministrator
+ENTRYPOINT ["/seaweedfs-csi-driver.exe"]
