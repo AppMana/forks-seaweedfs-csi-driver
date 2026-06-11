@@ -58,11 +58,21 @@ check_ready linux_node_ready app=seaweedfs-node "seaweedfs-node pods Ready"
 check_ready windows_mount_ready app=seaweedfs-mount-windows "seaweedfs-mount-windows pods Ready"
 check_ready windows_node_ready app=seaweedfs-node-windows "seaweedfs-node-windows pods Ready"
 
-drivers=$(
-  kubectl --kubeconfig "$KUBECONFIG" get csinode "$WINDOWS_NODE" \
-    -o jsonpath='{.spec.drivers[*].name}' 2>/dev/null || true
-)
-if [[ " $drivers " == *" seaweedfs-csi-driver "* ]]; then
+# Re-registration after a node DaemonSet roll takes a few seconds; poll
+# instead of sampling once so the preflight does not race the registrar.
+csinode_ok=false
+for _ in $(seq 1 12); do
+  drivers=$(
+    kubectl --kubeconfig "$KUBECONFIG" get csinode "$WINDOWS_NODE" \
+      -o jsonpath='{.spec.drivers[*].name}' 2>/dev/null || true
+  )
+  if [[ " $drivers " == *" seaweedfs-csi-driver "* ]]; then
+    csinode_ok=true
+    break
+  fi
+  sleep 5
+done
+if [[ "$csinode_ok" == "true" ]]; then
   echo "csinode_driver=True"
 else
   echo "csinode_driver=False"
