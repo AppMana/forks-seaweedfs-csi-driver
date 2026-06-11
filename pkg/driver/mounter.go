@@ -127,11 +127,13 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 		"-logtostderr=true",
 		"mount",
 		"-dirAutoCreate=true",
-		"-umask=000",
+	}
+	args = append(args, platformMountArgs()...)
+	args = append(args,
 		fmt.Sprintf("-dir=%s", targetPath),
 		fmt.Sprintf("-localSocket=%s", localSocket),
 		fmt.Sprintf("-cacheDir=%s", cacheDir),
-	}
+	)
 
 	if m.readOnly {
 		args = append(args, "-readOnly")

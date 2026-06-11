@@ -1,3 +1,5 @@
+//go:build linux
+
 package driver
 
 import (
@@ -155,4 +157,62 @@ func waitForMount(path string, timeout time.Duration) error {
 			return errors.New("timeout waiting for mount")
 		}
 	}
+}
+
+// checkMount reports whether targetPath is already a mount point,
+// creating the directory if it does not exist yet.
+func checkMount(targetPath string) (bool, error) {
+	isMnt, err := mountutil.IsMountPoint(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			if err = os.MkdirAll(targetPath, 0750); err != nil {
+				return false, err
+			}
+			isMnt = false
+		} else if mount.IsCorruptedMnt(err) {
+			if err := mountutil.Unmount(targetPath); err != nil {
+				return false, err
+			}
+			isMnt, err = mountutil.IsMountPoint(targetPath)
+		} else {
+			return false, err
+		}
+	}
+	return isMnt, nil
+}
+
+// defaultBindMount performs a real bind mount via mountutil. It is the
+// production implementation of BindMountFn.
+func defaultBindMount(source, target string, readOnly bool) error {
+	mountOptions := []string{"bind"}
+	if readOnly {
+		mountOptions = append(mountOptions, "ro")
+	}
+	return mountutil.Mount(source, target, "", mountOptions)
+}
+
+// unmountVolume unmounts the mount at path.
+func unmountVolume(path string) error {
+	return mountutil.Unmount(path)
+}
+
+// cleanupMountPoint unmounts (forcefully if needed) and removes the
+// mount point at path.
+func cleanupMountPoint(path string) error {
+	return mount.CleanupMountPoint(path, mountutil, true)
+}
+
+// isCorruptedMount reports whether err indicates a corrupted mount
+// ("transport endpoint is not connected" and friends).
+func isCorruptedMount(err error) bool {
+	return mount.IsCorruptedMnt(err)
+}
+
+// isPathMounted reports whether path is currently a mount point.
+func isPathMounted(path string) (bool, error) {
+	notMnt, err := mountutil.IsLikelyNotMountPoint(path)
+	if err != nil {
+		return false, err
+	}
+	return !notMnt, nil
 }

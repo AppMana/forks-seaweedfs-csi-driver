@@ -2,7 +2,7 @@ package driver
 
 import (
 	"context"
-	"fmt"
+	"net"
 	"os"
 	"sync"
 
@@ -11,7 +11,6 @@ import (
 	"github.com/seaweedfs/seaweedfs/weed/pb/mount_pb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"k8s.io/mount-utils"
 )
 
 type Volume struct {
@@ -27,8 +26,8 @@ type Volume struct {
 
 	// Fields for health monitor recovery
 	publishPaths sync.Map          // targetPath (string) -> bool (readOnly)
-	volContext   map[string]string  // volume context stored for re-staging
-	readOnly     bool               // FUSE-level readOnly flag
+	volContext   map[string]string // volume context stored for re-staging
+	readOnly     bool              // FUSE-level readOnly flag
 
 	// bindMountFn is used by Publish to perform the bind mount from the
 	// staging path to the pod-specific target path. Populated by the
@@ -51,7 +50,7 @@ func (vol *Volume) Stage(stagingTargetPath string) error {
 		return err
 	} else if isMnt {
 		// try to unmount before mounting again
-		_ = mountutil.Unmount(stagingTargetPath)
+		_ = unmountVolume(stagingTargetPath)
 	}
 
 	if u, err := vol.mounter.Mount(stagingTargetPath); err == nil {
@@ -88,21 +87,15 @@ func (vol *Volume) Publish(stagingTargetPath string, targetPath string, readOnly
 	return bind(stagingTargetPath, targetPath, readOnly)
 }
 
-// defaultBindMount performs a real bind mount via mountutil. It is the
-// production implementation of BindMountFn.
-func defaultBindMount(source, target string, readOnly bool) error {
-	mountOptions := []string{"bind"}
-	if readOnly {
-		mountOptions = append(mountOptions, "ro")
-	}
-	return mountutil.Mount(source, target, "", mountOptions)
-}
-
 func (vol *Volume) Quota(sizeByte int64) error {
-	target := fmt.Sprintf("passthrough:///unix://%s", vol.localSocket)
-	dialOption := grpc.WithTransportCredentials(insecure.NewCredentials())
+	target := "passthrough:///" + vol.localSocket
 
-	clientConn, err := grpc.Dial(target, dialOption)
+	clientConn, err := grpc.NewClient(target,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", addr)
+		}),
+	)
 	if err != nil {
 		return err
 	}
@@ -122,7 +115,7 @@ func (vol *Volume) Quota(sizeByte int64) error {
 
 func (vol *Volume) Unpublish(targetPath string) error {
 	// Try unmounting target path and deleting it.
-	if err := mount.CleanupMountPoint(targetPath, mountutil, true); err != nil {
+	if err := cleanupMountPoint(targetPath); err != nil {
 		return err
 	}
 
@@ -150,7 +143,7 @@ func (vol *Volume) Unstage(stagingTargetPath string) error {
 		glog.Infof("volume %s has no unmounter (rebuilt from existing mount), using force unmount", vol.VolumeId)
 
 		// Clean up using mount utilities. This will also handle unmounting.
-		if err := mount.CleanupMountPoint(stagingTargetPath, mountutil, true); err != nil {
+		if err := cleanupMountPoint(stagingTargetPath); err != nil {
 			glog.Errorf("error cleaning up mount point for volume %s: %v", vol.VolumeId, err)
 			return err
 		}

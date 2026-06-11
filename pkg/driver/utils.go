@@ -16,7 +16,6 @@ import (
 	"github.com/seaweedfs/seaweedfs/weed/glog"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
-	"k8s.io/mount-utils"
 )
 
 func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
@@ -38,7 +37,7 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 		capacityFn:       k8s.GetVolumeCapacity,
 		isHealthyFn:      isStagingPathHealthy,
 		cleanupStagingFn: cleanupStaleStagingPath,
-		unmountFn:        mountutil.Unmount,
+		unmountFn:        unmountVolume,
 		bindMountFn:      defaultBindMount,
 	}
 	ns.startHealthMonitor(defaultHealthCheckInterval)
@@ -126,26 +125,6 @@ func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, h
 	}
 	glog.V(3).Infof("GRPC %s response %+v", info.FullMethod, resp)
 	return resp, err
-}
-
-func checkMount(targetPath string) (bool, error) {
-	isMnt, err := mountutil.IsMountPoint(targetPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			if err = os.MkdirAll(targetPath, 0750); err != nil {
-				return false, err
-			}
-			isMnt = false
-		} else if mount.IsCorruptedMnt(err) {
-			if err := mountutil.Unmount(targetPath); err != nil {
-				return false, err
-			}
-			isMnt, err = mountutil.IsMountPoint(targetPath)
-		} else {
-			return false, err
-		}
-	}
-	return isMnt, nil
 }
 
 func removeDirContent(path string) error {

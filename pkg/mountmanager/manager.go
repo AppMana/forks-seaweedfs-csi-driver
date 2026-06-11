@@ -9,14 +9,10 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
-	"k8s.io/mount-utils"
 )
-
-var kubeMounter = mount.New("")
 
 // Manager owns weed mount processes and exposes helpers to start and stop them.
 type Manager struct {
@@ -38,6 +34,7 @@ func NewManager(cfg Config) *Manager {
 	if binary == "" {
 		binary = DefaultWeedBinary
 	}
+	binary = resolveWeedBinary(binary)
 	return &Manager{
 		weedBinary: binary,
 		mounts:     make(map[string]*mountEntry),
@@ -215,31 +212,6 @@ func (m *Manager) startMount(req *MountRequest) (*mountEntry, error) {
 	}, nil
 }
 
-func ensureTargetClean(targetPath string) error {
-	// Use IsLikelyNotMountPoint instead of deprecated IsMountPoint
-	notMnt, err := kubeMounter.IsLikelyNotMountPoint(targetPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Path does not exist, which is a clean state. Directory will be created below.
-		} else if mount.IsCorruptedMnt(err) {
-			glog.Warningf("Target path %s is a corrupted mount, attempting to unmount", targetPath)
-			if unmountErr := kubeMounter.Unmount(targetPath); unmountErr != nil {
-				return fmt.Errorf("failed to unmount corrupted mount %s: %w", targetPath, unmountErr)
-			}
-		} else {
-			return err
-		}
-	} else if !notMnt {
-		glog.Infof("Target path %s is an existing mount, attempting to unmount", targetPath)
-		if unmountErr := kubeMounter.Unmount(targetPath); unmountErr != nil {
-			return fmt.Errorf("failed to unmount existing mount %s: %w", targetPath, unmountErr)
-		}
-	}
-
-	// Ensure the path exists and is a directory.
-	return os.MkdirAll(targetPath, 0755)
-}
-
 func validateMountRequest(req *MountRequest) error {
 	if req.VolumeID == "" {
 		return errors.New("volumeId is required")
@@ -275,12 +247,17 @@ type weedMountProcess struct {
 	// the post-exit FUSE unmount step.
 	exited chan struct{}
 	// done is closed after wait() finishes its full cleanup (including
-	// the kubeMounter.Unmount of the target).
+	// the cleanup of the dead mount point at the target).
 	done chan struct{}
+
+	// platformProcess holds per-OS supervision state (e.g. the Windows
+	// job object handle). It is a zero-size struct on Linux.
+	platformProcess
 }
 
 func startWeedMountProcess(command string, args []string, target string, volumeID string) (*weedMountProcess, error) {
 	cmd := exec.Command(command, args...)
+	configureCmd(cmd)
 
 	// Capture stdout/stderr and log with volume ID prefix for better debugging
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -309,6 +286,10 @@ func startWeedMountProcess(command string, args []string, target string, volumeI
 		done:   make(chan struct{}),
 	}
 
+	if err := process.afterStart(); err != nil {
+		glog.Warningf("[%s] post-start process supervision setup failed: %v", volumeID, err)
+	}
+
 	go process.wait()
 
 	if err := waitForMount(target, 10*time.Second); err != nil {
@@ -328,59 +309,18 @@ func (p *weedMountProcess) wait() {
 		glog.Infof("weed mount exit (pid: %d, target: %s)", p.cmd.Process.Pid, p.target)
 	}
 
+	// Release per-OS supervision resources now that the process is gone.
+	p.releaseProcessResources()
+
 	// Signal exit immediately so Manager.Mount can detect a dead
 	// process without waiting for the post-exit unmount step.
 	close(p.exited)
 
 	// Brief delay to allow FUSE cleanup and pending I/O to complete before unmounting
 	time.Sleep(100 * time.Millisecond)
-	_ = kubeMounter.Unmount(p.target)
+	cleanupDeadMountPoint(p.target)
 
 	close(p.done)
-}
-
-func (p *weedMountProcess) stop() error {
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		glog.Warningf("sending SIGTERM to weed mount failed: %v", err)
-	}
-
-	select {
-	case <-p.done:
-		return nil
-	case <-time.After(5 * time.Second):
-	}
-
-	if err := p.cmd.Process.Kill(); err != nil {
-		glog.Warningf("killing weed mount failed: %v", err)
-	}
-
-	select {
-	case <-p.done:
-		return nil
-	case <-time.After(1 * time.Second):
-		return errors.New("timed out waiting for weed mount to stop")
-	}
-}
-
-func waitForMount(path string, timeout time.Duration) error {
-	var elapsed time.Duration
-	interval := 10 * time.Millisecond
-
-	for {
-		notMount, err := kubeMounter.IsLikelyNotMountPoint(path)
-		if err != nil {
-			return err
-		}
-		if !notMount {
-			return nil
-		}
-
-		time.Sleep(interval)
-		elapsed += interval
-		if elapsed >= timeout {
-			return errors.New("timeout waiting for mount")
-		}
-	}
 }
 
 // forwardLogs reads from a pipe and logs each line with a volume ID prefix.

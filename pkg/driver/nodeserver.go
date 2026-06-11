@@ -11,7 +11,6 @@ import (
 	"github.com/seaweedfs/seaweedfs/weed/glog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/mount-utils"
 )
 
 // MounterFactory creates a Mounter for a volume. It is a field on NodeServer
@@ -113,7 +112,7 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	}
 
 	// Check if there's a stale/corrupted mount that needs cleanup
-	if _, err := os.Stat(stagingTargetPath); err == nil || mount.IsCorruptedMnt(err) {
+	if _, err := os.Stat(stagingTargetPath); err == nil || isCorruptedMount(err) {
 		glog.Infof("volume %s has stale staging path at %s, cleaning up", volumeID, stagingTargetPath)
 		if err := cleanupStaleStagingPath(stagingTargetPath); err != nil {
 			ns.removeVolumeMutex(volumeID)
@@ -276,7 +275,7 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		glog.Warningf("volume %s hasn't been published", volumeID)
 
 		// make sure there is no any garbage
-		_ = mount.CleanupMountPoint(targetPath, mountutil, true)
+		_ = cleanupMountPoint(targetPath)
 
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
@@ -346,7 +345,7 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		glog.Warningf("volume %s hasn't been staged", volumeID)
 
 		// make sure there is no any garbage
-		_ = mount.CleanupMountPoint(stagingTargetPath, mountutil, true)
+		_ = cleanupMountPoint(stagingTargetPath)
 
 		// Also clean up cache directory and socket if they exist
 		CleanupVolumeResources(ns.Driver, volumeID)

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
-	"k8s.io/mount-utils"
 )
 
 const (
@@ -208,7 +207,7 @@ func (ns *NodeServer) retryPublishPaths(volumeID string) {
 		// does not short-circuit on a leftover mount.
 		if err := ns.unmountFn(path); err != nil {
 			glog.Warningf("health monitor: unmount of publish path %s for volume %s failed: %v, trying force cleanup", path, volumeID, err)
-			if cleanupErr := mount.CleanupMountPoint(path, mountutil, true); cleanupErr != nil {
+			if cleanupErr := cleanupMountPoint(path); cleanupErr != nil {
 				glog.Errorf("health monitor: force cleanup of publish path %s for volume %s also failed: %v", path, volumeID, cleanupErr)
 			}
 		}
@@ -277,7 +276,7 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 		glog.Infof("health monitor: unmounting stale publish path %s for volume %s", p.path, volumeID)
 		if err := ns.unmountFn(p.path); err != nil {
 			glog.Warningf("health monitor: unmount publish path %s failed: %v, trying force cleanup", p.path, err)
-			if cleanupErr := mount.CleanupMountPoint(p.path, mountutil, true); cleanupErr != nil {
+			if cleanupErr := cleanupMountPoint(p.path); cleanupErr != nil {
 				glog.Errorf("health monitor: force cleanup of publish path %s for volume %s also failed: %v", p.path, volumeID, cleanupErr)
 			}
 		}
@@ -308,7 +307,7 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 	// delete remote data via gRPC. The FUSE can still be alive here when
 	// vol.unmounter was nil (rebuilt volume) or when wait()'s
 	// kubeMounter.Unmount silently failed.
-	if notMnt, err := mountutil.IsLikelyNotMountPoint(stagingPath); err == nil && !notMnt {
+	if mounted, err := isPathMounted(stagingPath); err == nil && mounted {
 		glog.Errorf("health monitor: refusing to clean up staging path %s for volume %s — still a mount point; aborting recovery to avoid data deletion", stagingPath, volumeID)
 		return
 	}
