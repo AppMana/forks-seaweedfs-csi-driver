@@ -31,6 +31,11 @@ KUBELET_ROOT_LINUX="/var/lib/kubelet"
 KUBELET_ROOT_WINDOWS='C:\var\lib\kubelet'
 IMAGE_PULL_SECRET="${IMAGE_PULL_SECRET:-}"
 CACHE_CAPACITY_MB="${CACHE_CAPACITY_MB:-1024}"
+# Experimental: serve Windows mounts as WinFsp NETWORK file systems
+# (weed.exe WEED_WINFSP_VOLUME_PREFIX). Local WinFsp volumes cannot be
+# consumed by pods (HCS filter-attach failure, winfsp/winfsp#498); the
+# UNC route works. Empty disables the env (current product default).
+WINDOWS_WEED_VOLUME_PREFIX="${WINDOWS_WEED_VOLUME_PREFIX:-}"
 
 usage() {
   echo "Usage: $0 --csi-image IMG --mount-image IMG --filer HOST:PORT [--namespace NS] [--kubelet-root-linux DIR] [--kubelet-root-windows DIR] [--image-pull-secret NAME]" >&2
@@ -71,6 +76,11 @@ win_registry_esc="${win_root_esc}\\\\plugins_registry\\\\"
 pull_secrets_block=""
 if [[ -n "$IMAGE_PULL_SECRET" ]]; then
   pull_secrets_block=$'      imagePullSecrets:\n        - name: '"$IMAGE_PULL_SECRET"
+fi
+
+win_mount_extra_env=""
+if [[ -n "$WINDOWS_WEED_VOLUME_PREFIX" ]]; then
+  win_mount_extra_env=$'            - name: WEED_WINFSP_VOLUME_PREFIX\n              value: '"'$WINDOWS_WEED_VOLUME_PREFIX'"
 fi
 
 kubectl apply -f - <<EOF
@@ -575,6 +585,7 @@ $pull_secrets_block
           env:
             - name: MOUNT_ENDPOINT
               value: unix://C:\var\lib\seaweedfs-mount\seaweedfs-mount.sock
+$win_mount_extra_env
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
