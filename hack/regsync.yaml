@@ -1,0 +1,22 @@
+# Promote released images from ghcr.io/appmana to the in-cluster Harbor.
+# Run manually:
+#   regsync once -c hack/regsync.yaml
+# Credentials: docker login ghcr.io and harbor.appmana.com first (regsync
+# reads the local docker credential store).
+version: 1
+creds:
+  - registry: ghcr.io
+  - registry: harbor.appmana.com
+sync:
+  - source: ghcr.io/appmana/seaweedfs-csi-driver
+    target: harbor.appmana.com/appmana/seaweedfs-csi-driver
+    type: repository
+    tags:
+      allow:
+        - "v1\\.4\\.12-appmana\\.post\\..*"
+  - source: ghcr.io/appmana/seaweedfs-mount
+    target: harbor.appmana.com/appmana/seaweedfs-mount
+    type: repository
+    tags:
+      allow:
+        - "v1\\.4\\.12-appmana\\.post\\..*"

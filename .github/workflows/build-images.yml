@@ -1,0 +1,172 @@
+name: Build, test, and publish CSI driver images
+
+on:
+  push:
+    branches: [appmana/windows-v1.4.12]
+  pull_request:
+    branches: [appmana/windows-v1.4.12]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io/appmana
+  IMAGE_TAG: v1.4.12-appmana.post.1
+  # Pinned forks-seaweedfs commit providing weed.exe (WinFsp mount) and
+  # the weed linux binary; must have passed the forks-seaweedfs workflow.
+  SEAWEEDFS_COMMIT: 0dfeb6c8becac675c81c820271cc5d272869a390
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      csi-manifest-image: ${{ steps.images.outputs.csi-manifest-image }}
+      csi-linux-image: ${{ steps.images.outputs.csi-linux-image }}
+      csi-windows-image: ${{ steps.images.outputs.csi-windows-image }}
+      mount-manifest-image: ${{ steps.images.outputs.mount-manifest-image }}
+      mount-linux-image: ${{ steps.images.outputs.mount-linux-image }}
+      mount-windows-image: ${{ steps.images.outputs.mount-windows-image }}
+    steps:
+      - id: images
+        run: |
+          set -euo pipefail
+          csi="${REGISTRY}/seaweedfs-csi-driver:${IMAGE_TAG}"
+          mount="${REGISTRY}/seaweedfs-mount:${IMAGE_TAG}"
+          {
+            echo "csi-manifest-image=${csi}"
+            echo "csi-linux-image=${csi}-linux-amd64"
+            echo "csi-windows-image=${csi}-windows-ltsc2022"
+            echo "mount-manifest-image=${mount}"
+            echo "mount-linux-image=${mount}-linux-amd64"
+            echo "mount-windows-image=${mount}-windows-ltsc2022"
+          } >> "$GITHUB_OUTPUT"
+
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Vet
+        run: go vet ./pkg/... ./cmd/...
+      - name: Unit tests (race)
+        run: go test -race -count=1 ./...
+      - name: Cross-compile gate (windows/amd64)
+        run: |
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+          GOOS=windows GOARCH=amd64 go vet ./pkg/... ./cmd/...
+
+  test-windows:
+    runs-on: windows-2022
+    env:
+      CGO_ENABLED: "0"
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native windows unit tests (AF_UNIX canary, symlink publish, process supervision)
+        run: go test -count=1 -v ./pkg/driver/ ./pkg/mountmanager/
+
+  build-linux-images:
+    runs-on: ubuntu-latest
+    needs: [metadata, test-linux]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push) linux images
+        run: |
+          set -euo pipefail
+          output="--load"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then output="--push"; fi
+          docker buildx build $output --provenance=false --sbom=false \
+            --platform linux/amd64 \
+            -t "${{ needs.metadata.outputs.csi-linux-image }}" \
+            -f cmd/seaweedfs-csi-driver/Dockerfile .
+          docker buildx build $output --provenance=false --sbom=false \
+            --platform linux/amd64 \
+            --build-arg SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs \
+            --build-arg SEAWEEDFS_COMMIT="$SEAWEEDFS_COMMIT" \
+            -t "${{ needs.metadata.outputs.mount-linux-image }}" \
+            -f cmd/seaweedfs-mount/Dockerfile .
+
+  build-windows-images:
+    # HostProcess images are pure file layers built by linux stages, so
+    # buildx on ubuntu produces the windows/amd64 images (no Windows
+    # execution happens during the build).
+    runs-on: ubuntu-latest
+    needs: [metadata, test-linux, test-windows]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push) windows images
+        run: |
+          set -euo pipefail
+          output="--output=type=image,push=false"
+          if [ "${{ github.event_name }}" != "pull_request" ]; then output="--push"; fi
+          docker buildx build $output --provenance=false --sbom=false \
+            --platform windows/amd64 \
+            --build-arg SEAWEEDFS_COMMIT="$SEAWEEDFS_COMMIT" \
+            -t "${{ needs.metadata.outputs.csi-windows-image }}" \
+            -f cmd/seaweedfs-csi-driver/Dockerfile.Windows .
+          docker buildx build $output --provenance=false --sbom=false \
+            --platform windows/amd64 \
+            --build-arg SEAWEEDFS_COMMIT="$SEAWEEDFS_COMMIT" \
+            -t "${{ needs.metadata.outputs.mount-windows-image }}" \
+            -f cmd/seaweedfs-mount/Dockerfile.Windows .
+
+  publish-manifest:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
+    needs: [metadata, build-linux-images, build-windows-images]
+    env:
+      DOCKER_CLI_EXPERIMENTAL: enabled
+    steps:
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-platform manifests
+        run: |
+          set -euo pipefail
+          win_os_version="$(
+            docker manifest inspect mcr.microsoft.com/windows/nanoserver:ltsc2022 |
+              jq -r '.manifests[] | select(.platform.os == "windows" and .platform.architecture == "amd64") | .platform."os.version"' |
+              head -n 1
+          )"
+          publish() {
+            local manifest="$1" linux="$2" windows="$3"
+            docker manifest create "$manifest" "$linux" "$windows"
+            docker manifest annotate --os linux --arch amd64 "$manifest" "$linux"
+            docker manifest annotate --os windows --arch amd64 --os-version "$win_os_version" "$manifest" "$windows"
+            docker manifest push --purge "$manifest"
+            docker buildx imagetools inspect "$manifest"
+          }
+          publish "${{ needs.metadata.outputs.csi-manifest-image }}" \
+                  "${{ needs.metadata.outputs.csi-linux-image }}" \
+                  "${{ needs.metadata.outputs.csi-windows-image }}"
+          publish "${{ needs.metadata.outputs.mount-manifest-image }}" \
+                  "${{ needs.metadata.outputs.mount-linux-image }}" \
+                  "${{ needs.metadata.outputs.mount-windows-image }}"
