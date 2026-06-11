@@ -41,14 +41,33 @@ func resolveWeedBinary(binary string) string {
 	return binary
 }
 
+// defaultVolumePrefix is the WinFsp network-FS UNC prefix the supervisor
+// defaults for spawned weed mounts. HCS cannot attach the container
+// filters to LOCAL WinFsp volumes (winfsp/winfsp#498), so pods can only
+// consume CSI volumes through the network-FS path; for the CSI
+// supervisor (which exists only to serve pods) network mode is the only
+// working mode and therefore the default. Override with the
+// WEED_WINFSP_VOLUME_PREFIX env on the DaemonSet; set it to "local" to
+// force local directory mounts (debugging only — pods will not start).
+const defaultVolumePrefix = `\seaweedfs`
+
 // configureCmd places the weed mount process in its own console process
 // group so stop() can deliver CTRL_BREAK_EVENT to it (and only it). The
 // Go runtime in weed.exe maps both CTRL_C_EVENT and CTRL_BREAK_EVENT to
-// os.Interrupt, on which weed unmounts cleanly.
+// os.Interrupt, on which weed unmounts cleanly. It also defaults the
+// WinFsp network-FS mode for the child (see defaultVolumePrefix).
 func configureCmd(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
 	}
+	prefix, set := os.LookupEnv("WEED_WINFSP_VOLUME_PREFIX")
+	if !set {
+		prefix = defaultVolumePrefix
+	}
+	if strings.EqualFold(prefix, "local") {
+		return
+	}
+	cmd.Env = append(os.Environ(), "WEED_WINFSP_VOLUME_PREFIX="+prefix)
 }
 
 // afterStart assigns the freshly started weed mount process to a
