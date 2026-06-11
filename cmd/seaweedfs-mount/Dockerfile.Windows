@@ -9,6 +9,10 @@ ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG WINFSP_MSI_URL=https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi
 ARG WINFSP_MSI_SHA256=073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a
+# WEED_CGO=1 builds weed.exe with cgo against the WinFsp FUSE headers
+# (mingw cross toolchain); the DLL is still loaded at runtime either way.
+ARG WEED_CGO=0
+ARG WINFSP_HEADERS_TAG=v2.1
 
 FROM --platform=linux/amd64 golang:1.25 AS builder
 
@@ -18,6 +22,10 @@ ARG GO_FUSE_REPO
 ARG GO_FUSE_BRANCH
 ARG WINFSP_MSI_URL
 ARG WINFSP_MSI_SHA256
+ARG WEED_CGO
+ARG WINFSP_HEADERS_TAG
+
+RUN if [ "${WEED_CGO}" = "1" ]; then       apt-get update && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64       && rm -rf /var/lib/apt/lists/*       && git clone --depth 1 --branch ${WINFSP_HEADERS_TAG} https://github.com/winfsp/winfsp /src/winfsp       && mkdir -p /usr/local/include/winfsp       && cp -r /src/winfsp/inc/fuse/. /usr/local/include/winfsp/ ;     fi
 
 # The seaweedfs fork's go.mod contains:
 #   replace github.com/seaweedfs/go-fuse/v2 => ../forks-go-fuse
@@ -29,7 +37,8 @@ RUN git clone ${SEAWEEDFS_REPO} /src/forks-seaweedfs \
 
 # Build weed.exe with WinFsp support.
 RUN cd /src/forks-seaweedfs/weed \
-    && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -tags 5BytesOffset -ldflags="-s -w" -o /out/weed.exe
+    && CGO_ENABLED=${WEED_CGO} CC=x86_64-w64-mingw32-gcc CPATH=/usr/local/include/winfsp \
+       GOOS=windows GOARCH=amd64 go build -tags 5BytesOffset -ldflags="-s -w" -o /out/weed.exe
 
 # Build seaweedfs-mount.exe from the build context.
 WORKDIR /go/src/github.com/seaweedfs/seaweedfs-csi-driver

@@ -13,10 +13,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/appmana
-  IMAGE_TAG: v1.4.12-appmana.post.2
+  IMAGE_TAG: v1.4.12-appmana.post.3
   # Pinned forks-seaweedfs commit providing weed.exe (WinFsp mount) and
   # the weed linux binary; must have passed the forks-seaweedfs workflow.
-  SEAWEEDFS_COMMIT: 1d8e6f36513675c48eed3f97ecb1c96ae94888b8
+  SEAWEEDFS_COMMIT: 4d6d4505fe2ca65a3c7e37b852500474b9a1972b
 
 jobs:
   metadata:
@@ -132,6 +132,7 @@ jobs:
           docker buildx build $output --provenance=false --sbom=false \
             --platform windows/amd64 \
             --build-arg SEAWEEDFS_COMMIT="$SEAWEEDFS_COMMIT" \
+            --build-arg WEED_CGO="${WEED_CGO:-0}" \
             -t "${{ needs.metadata.outputs.mount-windows-image }}" \
             -f cmd/seaweedfs-mount/Dockerfile.Windows .
 

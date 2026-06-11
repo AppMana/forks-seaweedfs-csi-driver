@@ -64,10 +64,14 @@ func configureCmd(cmd *exec.Cmd) {
 	if !set {
 		prefix = defaultVolumePrefix
 	}
-	if strings.EqualFold(prefix, "local") {
-		return
+	if !strings.EqualFold(prefix, "local") {
+		cmd.Env = append(os.Environ(), "WEED_WINFSP_VOLUME_PREFIX="+prefix)
 	}
-	cmd.Env = append(os.Environ(), "WEED_WINFSP_VOLUME_PREFIX="+prefix)
+	// SEAWEEDFS_WINFSP_OPTIONS lets the DaemonSet tune WinFsp -o options
+	// (FileInfoTimeout etc.) without an image rebuild.
+	if opts := os.Getenv("SEAWEEDFS_WINFSP_OPTIONS"); opts != "" {
+		cmd.Args = append(cmd.Args, "-winfspOptions="+opts)
+	}
 }
 
 // afterStart assigns the freshly started weed mount process to a
