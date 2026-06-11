@@ -581,7 +581,7 @@ fi
 assert_log_contains "forwarding"
 assert_log_contains "calico-preflight"
 assert_log_contains "deploy-seaweedfs --namespace seaweedfs-test --image chrislusf/seaweedfs:4.23_large_disk"
-assert_log_contains "deploy-csi --namespace seaweedfs-csi --csi-image ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.1 --mount-image ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.1 --filer 172.21.0.2:8888"
+assert_log_contains "deploy-csi --namespace seaweedfs-csi --csi-image ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.2 --mount-image ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.2 --filer 172.21.0.2:8888"
 assert_log_contains "csi-preflight NAMESPACE=seaweedfs-csi WINDOWS_NODE=appmana-000"
 assert_log_contains "health --namespace seaweedfs-csi-test --storage-class seaweedfs-storage --linux-node appmana-calico-worker --windows-node appmana-000 --windows-exec hcsdiag"
 
