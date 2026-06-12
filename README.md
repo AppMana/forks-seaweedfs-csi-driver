@@ -1,254 +1,133 @@
-# Container Storage Interface (CSI) for SeaweedFS
+# forks-seaweedfs-csi-driver — SeaweedFS CSI with Windows node support
 
-[![Docker Pulls](https://img.shields.io/docker/pulls/chrislusf/seaweedfs-csi-driver.svg?maxAge=4800)](https://hub.docker.com/r/chrislusf/seaweedfs-csi-driver/)
-[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/seaweedfs-csi-driver)](https://artifacthub.io/packages/search?repo=seaweedfs-csi-driver)
+AppMana fork of [seaweedfs/seaweedfs-csi-driver](https://github.com/seaweedfs/seaweedfs-csi-driver)
+(v1.4.12). It makes `seaweedfs-storage` PersistentVolumes mount on **Windows**
+Kubernetes nodes: the same StorageClass and driver serve Linux and Windows
+pods, including cross-OS ReadWriteMany.
 
-[Container storage interface](https://kubernetes-csi.github.io/docs/) is an [industry standard](https://github.com/container-storage-interface/spec/blob/master/spec.md) that enables storage vendors to develop a plugin once and have it work across a number of container orchestration systems.
+How it works on Windows:
 
-[SeaweedFS](https://github.com/seaweedfs/seaweedfs) is a simple and highly scalable distributed file system, to store and serve billions of files fast!
+- The node plugin and the mount supervisor run as **HostProcess** DaemonSets
+  (Server 2022, containerd). No csi-proxy: file and process operations are
+  direct Win32 calls.
+- The supervisor spawns one `weed.exe mount` (from
+  [AppMana/forks-seaweedfs](https://github.com/AppMana/forks-seaweedfs),
+  WinFsp-backed) per volume in **network-FS mode**: the volume is served as a
+  UNC path, which is the only form Windows containers can consume
+  ([winfsp#498](https://github.com/winfsp/winfsp/issues/498)). Publish is a
+  symlink, like the SMB/Azure-File CSI drivers.
+- weed.exe children are held in a kill-on-close job object and stopped with a
+  console ctrl event for clean unmounts; staged volumes are rediscovered from
+  kubelet's `vol_data.json` after plugin restarts (`--stagingScanDir`) and
+  re-staged by the health monitor.
+- WinFsp is installed on the host idempotently by an initContainer from the
+  MSI shipped in the mount image.
 
-<br>
+**Large volumes:** the bundled `weed.exe`/`weed` binaries are the large-disk
+build (`-tags 5BytesOffset`, 5-byte needle offsets for 8TB volume files),
+matching clusters that run the upstream `*_large_disk` images.
 
-- [Deployment](#deployment)
-  - [Kubernetes (kubectl)](#kubernetes-kubectl)
-  - [Kubernetes (helm)](#kubernetes-helm)
-- [Update (Safe rollout)](#update-safe-rollout)
-- [Testing](#testing)
-- [Static and dynamic provisioning](#static-and-dynamic-provisioning)
-- [DataLocality](#datalocality)
-- [License](#license)
-- [Code of conduct](#code-of-conduct)
-
-<br>
-
-# Deployment
-## Kubernetes (kubectl)
-### Prerequisites:
-* Already have a working Kubernetes cluster (includes `kubectl`)
-* Already have a working SeaweedFS cluster
-
-### Install
-
-#### Helm
-
-1. Add the helm repo;
-
-```sh
-helm repo add seaweedfs-csi-driver https://seaweedfs.github.io/seaweedfs-csi-driver/helm
-```
-
-2. Check versions by `helm repo update seaweedfs-csi-driver` and `helm search repo seaweedfs-csi-driver`
-
-#### Source
-
-1. Clone this repository 
-```sh
-git clone https://github.com/seaweedfs/seaweedfs-csi-driver.git
-```
-
-2. Adjust your SeaweedFS Filer address via variable SEAWEEDFS_FILER in `deploy/kubernetes/seaweedfs-csi.yaml` (2 places)
-
-3. Apply the container storage interface for SeaweedFS for your cluster.  Use the '-pre-1.17' version for any cluster pre kubernetes version 1.17.
-
-### To generate an up to date manifest from the helm chart, do:
+Images (multi-OS manifest lists, `linux/amd64` + `windows/amd64` ltsc2022):
 
 ```
-$ helm template seaweedfs ./deploy/helm/seaweedfs-csi-driver > deploy/kubernetes/seaweedfs-csi.yaml
-```
-Check the kubelet root directory ,Execute the following command
-```
-ps -ef | grep kubelet | grep root-dir
-```
-If the result returned from the previous check command is not empty, the root directory (eg:--root-dir=/data/k8s/kubelet/data) representing the kubelet is not the default value (/var/lib/kubelet), so you need to update the kubelet root-dir in the CSI driven deployment file and deploy:
-```
-sed 's+/var/lib/kubelet+/data/k8s/kubelet/data+g'  deploy/kubernetes/seaweedfs-csi.yaml | kubectl apply -f - 
-```
-If the result returned by the previous check command is null, you can directly deploy it without modifying the configuration:
-```
-$ kubectl apply -f deploy/kubernetes/seaweedfs-csi.yaml
-```
-4. Ensure all the containers are ready and running
-```
-$ kubectl get po -n kube-system
+ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.5
+ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
 ```
 
-### TLS Support
-The provided static manifest `deploy/kubernetes/seaweedfs-csi.yaml` does not include TLS configuration by default. To enable TLS, it is recommended to use [Helm](#kubernetes-helm) with `tlsSecret` configured. If you must use static manifests, you will need to manually patch the `seaweedfs-mount` and `seaweedfs-node` DaemonSets to include the necessary TLS environment variables and volume mounts.
+## Deploying the Windows DaemonSets
 
-### Uninstall
+Deploy the upstream controller, StorageClass and Linux DaemonSets as usual
+(`deploy/kubernetes/seaweedfs-csi.yaml`), then add the two Windows
+DaemonSets. Minimal example (adjust the filer address and images):
 
-```
-$ kubectl delete -f deploy/kubernetes/sample-busybox-pod.yaml
-$ kubectl delete -f deploy/kubernetes/sample-seaweedfs-pvc.yaml
-$ kubectl delete -f deploy/kubernetes/seaweedfs-csi.yaml
-```
-
-## Kubernetes (helm)
-
-### Install
-
-1. Clone project
-```bash
-git clone https://github.com/seaweedfs/seaweedfs-csi-driver.git
-```
-2. Edit `./deploy/helm/seaweedfs-csi-driver/values.yaml` if required and Install
-```bash
-helm install --set seaweedfsFiler=<filerHost:port> seaweedfs-csi-driver ./deploy/helm/seaweedfs-csi-driver
-```
-Example with multiple filers :
-```bash
-helm install seaweedfs-csi-driver ./deploy/helm/seaweedfs-csi-driver/ \
-  --namespace seaweedfs-csi-driver \
-  --set seaweedfsFiler="<filerHost:port>\,<filerHost:port>\,<filerHost:port>\,<filerHost:port>\,<filerHost:port>"
-```
-
-### Uninstall
-
-```bash
-helm uninstall seaweedfs-csi-driver
-```
-
-# Update (Safe rollout)
-Updating seaweed-csi-driver DaemonSet (DS) will break processeses who implement fuse mount:
-newly created pods will not remount net device.
-
-For safe update set `node.updateStrategy.type: OnDelete` for manual update. Steps:
-
-  1. delete DS pods on the node where there is no seaweedfs PV
-  2. cordon or taint node
-  3. evict or delete pods with seaweedfs PV
-  4. delete DS pod on node
-  5. uncordon or remove taint on node
-  6. repeat all steps on [all nodes]
-
-# Testing
-
-1. Create a persistant volume claim for 5GiB with name `seaweedfs-csi-pvc` with storage class `seaweedfs-storage`. The value, 5Gib does not have any significance as for SeaweedFS the whole filesystem is mounted into the container.
-```
-$ kubectl apply -f deploy/kubernetes/sample-seaweedfs-pvc.yaml
-```
-2. Verify if the persistant volume claim exists and wait until its the STATUS is `Bound`
-```
-$ kubectl get pvc
-```
-3. After its in `Bound` state, create a sample workload mounting that volume
-```
-$ kubectl apply -f deploy/kubernetes/sample-busybox-pod.yaml
-```
-4. Verify the storage mount of the busybox pod
-```
-$ kubectl exec my-csi-app -- df -h
-```
-
-# Static and dynamic provisioning
-
-By default, driver will create separate folder (`/buckets/<volume-id>`) and will use separate collection (`volume-id`)
-for each request. Sometimes we need to use exact collection name or change replication options.
-It can be done via creating separate storage class with options:
-
-```
-kind: StorageClass
-apiVersion: storage.k8s.io/v1
+```yaml
+apiVersion: apps/v1
+kind: DaemonSet
 metadata:
-  name: seaweedfs-special
-provisioner: seaweedfs-csi-driver
-parameters:
-  collection: mycollection
-  replication: "011"
-  diskType: "ssd"
-```
-
-There is another use case when we need to access one folder from different pods with ro/rw access.
-In this case we do not need additional StorageClass. We need to create PersistentVolume:
-
-```
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: seaweedfs-static
+  name: seaweedfs-mount-windows
+  namespace: seaweedfs
 spec:
-  accessModes:
-  - ReadWriteMany
-  capacity:
-    storage: 1Gi
-  csi:
-    driver: seaweedfs-csi-driver
-    volumeHandle: dfs-test
-    volumeAttributes:
-      collection: default
-      replication: "011"
-      path: /path/to/files
-      diskType: "ssd"
-    readOnly: true
-  persistentVolumeReclaimPolicy: Retain
-  volumeMode: Filesystem
-```
-
-and bind PersistentVolumeClaim(s) to it:
-
-```
-apiVersion: v1
-kind: PersistentVolumeClaim
+  selector: { matchLabels: { app: seaweedfs-mount-windows } }
+  template:
+    metadata:
+      labels: { app: seaweedfs-mount-windows }
+    spec:
+      nodeSelector: { kubernetes.io/os: windows }
+      tolerations: [{ operator: Exists, effect: NoSchedule }]
+      securityContext:
+        windowsOptions: { hostProcess: true, runAsUserName: "NT AUTHORITY\\SYSTEM" }
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      serviceAccountName: seaweedfs-node-sa
+      initContainers:
+        - name: install-winfsp
+          image: ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
+          command: ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
+          args:
+            - >-
+              if (-not (Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) {
+              Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" 'C:\Windows\Temp\winfsp.msi' -Force ;
+              $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000' ;
+              if ($p.ExitCode -ne 0) { exit 1 } } ;
+              New-Item -ItemType Directory -Force -Path C:\var\lib\seaweedfs-mount, C:\var\cache\seaweedfs | Out-Null
+      containers:
+        - name: seaweedfs-mount
+          image: ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
+          command: ["$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-mount.exe"]
+          args: ["--endpoint=unix://C:\\var\\lib\\seaweedfs-mount\\seaweedfs-mount.sock"]
+---
+apiVersion: apps/v1
+kind: DaemonSet
 metadata:
-  name: seaweedfs-static
+  name: seaweedfs-node-windows
+  namespace: seaweedfs
 spec:
-  storageClassName: ""
-  volumeName: seaweedfs-static
-  accessModes:
-  - ReadWriteMany
-  resources:
-    requests:
-      storage: 1Gi
+  selector: { matchLabels: { app: seaweedfs-node-windows } }
+  template:
+    metadata:
+      labels: { app: seaweedfs-node-windows }
+    spec:
+      nodeSelector: { kubernetes.io/os: windows }
+      tolerations: [{ operator: Exists, effect: NoSchedule }]
+      securityContext:
+        windowsOptions: { hostProcess: true, runAsUserName: "NT AUTHORITY\\SYSTEM" }
+      hostNetwork: true
+      priorityClassName: system-node-critical
+      serviceAccountName: seaweedfs-node-sa
+      containers:
+        - name: csi-seaweedfs-plugin
+          image: ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.5
+          command: ["$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-csi-driver.exe"]
+          args:
+            - --endpoint=unix://C:\var\lib\kubelet\plugins\seaweedfs-csi-driver\csi.sock
+            # use the FQDN: weed.exe runs as a host process and short
+            # service names do not resolve on Windows hosts
+            - --filer=seaweedfs-filer.seaweedfs.svc.cluster.local:8888
+            - --nodeid=$(NODE_ID)
+            - --driverName=seaweedfs-csi-driver
+            - --mountEndpoint=unix://C:\var\lib\seaweedfs-mount\seaweedfs-mount.sock
+            - --cacheDir=C:\var\cache\seaweedfs
+            - --cacheCapacityMB=51200
+            - --stagingScanDir=C:\var\lib\kubelet\plugins\kubernetes.io\csi
+            - --components=node
+          env:
+            - name: NODE_ID
+              valueFrom: { fieldRef: { fieldPath: spec.nodeName } }
+        - name: driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.16.0
+          command: ["csi-node-driver-registrar.exe"]
+          args:
+            - --csi-address=unix://C:\var\lib\kubelet\plugins\seaweedfs-csi-driver\csi.sock
+            - --kubelet-registration-path=C:\\var\\lib\\kubelet\\plugins\\seaweedfs-csi-driver\\csi.sock
+            - --plugin-registration-path=C:\\var\\lib\\kubelet\\plugins_registry\\
 ```
 
-# DataLocality
+Tuning: set `SEAWEEDFS_WINFSP_OPTIONS=FileInfoTimeout=-1` on the mount
+DaemonSet for **read-mostly** volumes (model caches etc.) to enable kernel
+data caching — a large small-read speedup, but unsafe for volumes that see
+delete-then-recreate patterns (see `forks-seaweedfs/WINDOWS_PORT.md`).
 
-DataLocality (inspired by [Longhorn](https://longhorn.io/docs/latest/high-availability/data-locality/)) allows instructing the storage-driver which volume-locations will be used or preferred in Pods to read & write.
+`hack/appmana/` contains the kind + QEMU-Windows e2e harness (cross-OS RWX
+matrix and resilience drills) and the CI mount benchmark.
 
-It auto-sets mount-options based on the location a pod is scheduled in and the locality-option wanted.
-The option can be set and overridden in *Driver*, *StorageClass* and *PersistentVolume*.
-
-## Setup
-
-Change the type of locality
-
-Level               | Location
-------------------- | --------
-Driver              | Helm: `values.yaml` -> `dataLocality` <br> Or `DaemonSet` -> Container `csi-seaweedfs-plugin` -> args `--dataLocality=`
-StorageClass        | `parameter.dataLocality`
-PersistentVolume    | `spec.csi.volumeAttributes.dataLocality`
-
-Driver < StorageClass < PersistentVolume
-
-## Available options
-
-Option                  | Effect
------------------------ | ------
-`none` (default)                 | Changes nothing
-`write_preferLocalDc`   | Sets the `DataCenter`-mount-option to the current Node-DataCenter, making writes local and allowing reads to occur wherever read data is stored. [More Details](#`write_preferLocalDc`)
-
-## Requirements
-
-Volume-Servers and the CSI-Driver-Node need to have the locality-option `DataCenter` correctly set (currently only this option is required).
-
-This can be done manually (although quite tedious) or injected by the Container-Orchestration.
-
-### Automatic injection
-
-**Kubernetes**
-
-Unfortunately Kubernetes doesnt allow grabbing node-labels, which contain well-known region-labels, and setting them as environment-variables.
-The DownwardAPI is very limited in that regard. (see [#40610](https://github.com/kubernetes/kubernetes/issues/40610))
-
-Therefore a workaround must be used. [KubeMod](https://github.com/kubemod/kubemod) can be used based on [this comment](https://github.com/kubernetes/kubernetes/issues/40610#issuecomment-1364368282). This of course requires KubeMod to be installed.
-
-You can activate it in the Helm-Chart `values.yaml` -> `node.injectTopologyInfoFromNodeLabel.enabled`.
-`node.injectTopologyInfoFromNodeLabel.labels` decides which labels are grabbed from the node.
-
-It is recommended to use [well-known labels](https://kubernetes.io/docs/reference/labels-annotations-taints/#topologykubernetesioregion) to avoid confusion.
-
-# License
-[Apache v2 license](https://www.apache.org/licenses/LICENSE-2.0)
-
-# Code of conduct
-Participation in this project is governed by [Kubernetes/CNCF code of conduct](https://github.com/kubernetes/community/blob/master/code-of-conduct.md)
+Upstream README: https://github.com/seaweedfs/seaweedfs-csi-driver
