@@ -200,7 +200,10 @@ func TestRecoverVolumeCallsContainerRemount(t *testing.T) {
 
 	// Simulate crash and trigger recovery.
 	state.healthy.Store(false)
-	ns.checkAndRecoverVolumes()
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
 	ns.recoveryWg.Wait()
 
 	// Verify recovery happened (host-level).

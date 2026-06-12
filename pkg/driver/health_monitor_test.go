@@ -190,9 +190,12 @@ func TestHealthMonitorRecoversStaleMount(t *testing.T) {
 		t.Fatal("fake should report unhealthy after crash")
 	}
 
-	// --- Trigger one health check cycle ---
-	ns.checkAndRecoverVolumes()
-	ns.recoveryWg.Wait()
+	// --- Trigger health check cycles (recovery fires only after
+	// defaultUnhealthyThreshold consecutive failures) ---
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
 
 	// --- Verify recovery actions ---
 	state.mu.Lock()
@@ -272,8 +275,10 @@ func TestHealthMonitorAbortsOnUnmounterError(t *testing.T) {
 	state.mu.Unlock()
 	state.healthy.Store(false)
 
-	ns.checkAndRecoverVolumes()
-	ns.recoveryWg.Wait()
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -312,8 +317,10 @@ func TestHealthMonitorSkipsHealthyVolumes(t *testing.T) {
 	ns.volumes.Store("vol-1", vol)
 
 	// Healthy throughout — one recovery sweep should be a no-op.
-	ns.checkAndRecoverVolumes()
-	ns.recoveryWg.Wait()
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -346,8 +353,10 @@ func TestHealthMonitorSkipsVolumesWithoutContext(t *testing.T) {
 	ns.volumes.Store("vol-1", vol)
 
 	state.healthy.Store(false)
-	ns.checkAndRecoverVolumes()
-	ns.recoveryWg.Wait()
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -384,8 +393,10 @@ func TestHealthMonitorDeduplicatesInFlightRecovery(t *testing.T) {
 	state.healthy.Store(false)
 
 	before := state.stageCalls
-	ns.checkAndRecoverVolumes()
-	ns.recoveryWg.Wait()
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -430,7 +441,9 @@ func TestHealthMonitorRetriesFailedPublishes(t *testing.T) {
 	initialBind := state.bindMountCalls
 	state.setPathHealth(publishPath, false)
 
-	// Staging is healthy, publish is not → retryPublishPaths should run.
+	// Staging is healthy, publish is not → retryPublishPaths runs on the
+	// first tick (the consecutive-failure threshold gates only staging
+	// recovery, not publish re-binds).
 	ns.checkAndRecoverVolumes()
 	ns.recoveryWg.Wait()
 

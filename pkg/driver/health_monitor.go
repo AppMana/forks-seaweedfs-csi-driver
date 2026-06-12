@@ -12,7 +12,15 @@ const (
 	// defaultHealthCheckTimeout bounds any single isHealthyFn call so a
 	// frozen FUSE daemon (os.ReadDir blocked in the kernel) cannot stall
 	// the health monitor goroutine indefinitely.
-	defaultHealthCheckTimeout = 5 * time.Second
+	// 30s: first-touch UNC access and ReadDir under concurrent IO load
+	// on Windows can legitimately exceed several seconds; a tight bound
+	// here false-positives and tears down healthy mounts.
+	defaultHealthCheckTimeout = 30 * time.Second
+
+	// defaultUnhealthyThreshold is the number of consecutive failed
+	// checks before recovery runs. A dead mount fails instantly, so
+	// real failures still recover within ~3 sweep intervals.
+	defaultUnhealthyThreshold = 3
 )
 
 func (ns *NodeServer) startHealthMonitor(interval time.Duration) {
@@ -143,10 +151,17 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 	}
 
 	if !ns.checkHealth(vol.StagedPath) {
-		glog.Warningf("health monitor: detected unhealthy staging mount for volume %s at %s", volumeID, vol.StagedPath)
+		n := vol.healthFailCount.Add(1)
+		if n < defaultUnhealthyThreshold {
+			glog.Warningf("health monitor: staging mount for volume %s failed check %d/%d at %s", volumeID, n, defaultUnhealthyThreshold, vol.StagedPath)
+			return
+		}
+		vol.healthFailCount.Store(0)
+		glog.Warningf("health monitor: detected unhealthy staging mount for volume %s at %s (%d consecutive failures)", volumeID, vol.StagedPath, defaultUnhealthyThreshold)
 		ns.recoverVolume(volumeID)
 		return
 	}
+	vol.healthFailCount.Store(0)
 
 	// Staging is alive; check whether any publish bind mounts have
 	// been dropped (e.g. from a previous partial recovery) and need

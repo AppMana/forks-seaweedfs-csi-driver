@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/seaweedfs/seaweedfs-csi-driver/pkg/mountmanager"
 	"github.com/seaweedfs/seaweedfs/weed/glog"
@@ -25,9 +26,13 @@ type Volume struct {
 	driver      *SeaweedFsDriver
 
 	// Fields for health monitor recovery
-	publishPaths sync.Map          // targetPath (string) -> bool (readOnly)
-	volContext   map[string]string // volume context stored for re-staging
-	readOnly     bool              // FUSE-level readOnly flag
+	// healthFailCount counts consecutive failed health checks; recovery
+	// fires only at defaultUnhealthyThreshold (one slow check under IO
+	// load must not tear down a live mount).
+	healthFailCount atomic.Int32
+	publishPaths    sync.Map          // targetPath (string) -> bool (readOnly)
+	volContext      map[string]string // volume context stored for re-staging
+	readOnly        bool              // FUSE-level readOnly flag
 
 	// bindMountFn is used by Publish to perform the bind mount from the
 	// staging path to the pod-specific target path. Populated by the
