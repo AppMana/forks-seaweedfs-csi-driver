@@ -71,7 +71,7 @@ func (ns *NodeServer) recoverStagedVolumesFromDisk(scanDir string) {
 		// health monitor re-stage with handle-derived defaults.
 		vol.volContext = map[string]string{}
 		ns.volumes.Store(vd.VolumeHandle, vol)
-		if ns.checkHealth(stagingPath) {
+		if ns.checkHealth(stagingPath) == healthOK {
 			glog.Infof("staging recovery: volume %s healthy at %s, tracking", vd.VolumeHandle, stagingPath)
 		} else {
 			glog.Warningf("staging recovery: volume %s unhealthy at %s, health monitor will re-stage", vd.VolumeHandle, stagingPath)

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/seaweedfs/seaweedfs-csi-driver/pkg/mountmanager"
@@ -60,6 +61,11 @@ type NodeServer struct {
 	cleanupStagingFn func(stagingPath string) error
 	unmountFn        func(path string) error
 	bindMountFn      BindMountFn
+
+	// healthCheckTimeout bounds any single isHealthyFn call. Zero means
+	// defaultHealthCheckTimeout. Overridden in tests so a slow-mount
+	// scenario can be exercised without waiting the full production bound.
+	healthCheckTimeout time.Duration
 }
 
 var _ = csi.NodeServer(&NodeServer{})

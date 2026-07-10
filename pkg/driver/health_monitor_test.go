@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeMountState tracks the behavior of a fake FUSE mount across a
@@ -404,6 +405,81 @@ func TestHealthMonitorDeduplicatesInFlightRecovery(t *testing.T) {
 	// an in-flight marker and bailed out.
 	if state.stageCalls != before {
 		t.Errorf("expected no new stage calls while recovery is in flight, got %d new", state.stageCalls-before)
+	}
+}
+
+// TestHealthMonitorDoesNotRecoverSlowButAliveMount is the regression
+// test for the production ENOTCONN incident on appmana-022/025. A FUSE
+// staging mount that is *alive but slow* — its os.ReadDir blocked behind
+// queued filer I/O while a GPU workload does large sequential reads —
+// must never be torn down. The pre-fix code collapsed a health-probe
+// timeout into "dead" and, after the consecutive-failure threshold,
+// ran full recovery: it unmounted the live publish bind mount out from
+// under the running pod, which is exactly what handed that pod
+// "Transport endpoint is not connected" on its first write.
+//
+// The mount here is not dead: the probe never returns a negative, it
+// simply blocks past the health-check timeout. Recovery (staging
+// cleanup, re-stage, publish unmount/re-bind) must NOT fire.
+func TestHealthMonitorDoesNotRecoverSlowButAliveMount(t *testing.T) {
+	state := newFakeMountState()
+	ns := newNodeServerWithFakes(t, state)
+
+	// Tight timeout so "slow" is reached in milliseconds, not the
+	// production 30s.
+	ns.healthCheckTimeout = 50 * time.Millisecond
+
+	root := t.TempDir()
+	stagingPath := filepath.Join(root, "staging")
+	publishPath := filepath.Join(root, "pod", "mount")
+
+	volCtx := map[string]string{"collection": "c"}
+
+	vol, err := ns.stageNewVolume("vol-1", stagingPath, volCtx, false)
+	if err != nil {
+		t.Fatalf("stageNewVolume: %v", err)
+	}
+	vol.volContext = volCtx
+	vol.readOnly = false
+	ns.volumes.Store("vol-1", vol)
+
+	if err := vol.Publish(stagingPath, publishPath, false); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	vol.AddPublishPath(publishPath, false)
+
+	// The probe for the staging path BLOCKS past the timeout (alive but
+	// busy). Publish paths answer healthy immediately. Crucially the
+	// probe never returns false — the mount is not dead, only slow.
+	ns.isHealthyFn = func(path string) bool {
+		if path == stagingPath {
+			time.Sleep(200 * time.Millisecond)
+			return true
+		}
+		return true
+	}
+
+	// Drive well past the consecutive-failure threshold. A slow mount
+	// must be recovered on none of these ticks.
+	for i := 0; i < defaultUnhealthyThreshold+2; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.stageCalls != 1 {
+		t.Errorf("slow-but-alive mount was re-staged: expected 1 stage call, got %d", state.stageCalls)
+	}
+	if state.cleanupCalls != 0 {
+		t.Errorf("slow-but-alive mount had its staging path cleaned up: expected 0, got %d", state.cleanupCalls)
+	}
+	if state.unmountCalls != 0 {
+		t.Errorf("recovery unmounted the live publish path out from under the pod (root cause of ENOTCONN): expected 0 unmounts, got %d", state.unmountCalls)
+	}
+	if state.unstageCalls != 0 {
+		t.Errorf("recovery tore down the live FUSE mount via the manager: expected 0, got %d", state.unstageCalls)
 	}
 }
 

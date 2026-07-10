@@ -52,26 +52,73 @@ func (ns *NodeServer) runHealthCheckTick() {
 	ns.checkAndRecoverVolumes()
 }
 
+// healthResult is the tri-state outcome of a mount health probe. The
+// distinction between "dead" and "slow" is load-bearing: only a mount
+// that is *definitively* dead may be torn down and re-staged. A probe
+// that merely timed out means the FUSE daemon is busy under IO load
+// (large sequential GPU reads/writes stall os.ReadDir behind queued
+// filer I/O) — tearing that mount down would rip a live, working mount
+// out from under a running pod and hand it ENOTCONN.
+type healthResult int
+
+const (
+	// healthOK: the probe returned and reported the mount responsive.
+	healthOK healthResult = iota
+	// healthDead: the probe returned *quickly* reporting the mount is
+	// not usable. A dead FUSE fails syscalls with ENOTCONN immediately
+	// (mount.IsCorruptedMnt), so a fast negative is a definitive death
+	// signal and the only state that authorizes destructive recovery.
+	healthDead
+	// healthSlow: the probe did not return within the timeout. This is
+	// "busy", not "dead" — it must never trigger a teardown. Retried on
+	// the next tick.
+	healthSlow
+)
+
+func (r healthResult) String() string {
+	switch r {
+	case healthOK:
+		return "ok"
+	case healthDead:
+		return "dead"
+	case healthSlow:
+		return "slow"
+	default:
+		return "unknown"
+	}
+}
+
+func (ns *NodeServer) checkTimeout() time.Duration {
+	if ns.healthCheckTimeout > 0 {
+		return ns.healthCheckTimeout
+	}
+	return defaultHealthCheckTimeout
+}
+
 // checkHealth runs isHealthyFn with a timeout so a hung FUSE daemon
-// cannot stall the monitor sweep. On timeout the path is considered
-// unhealthy, which either triggers recovery (if it really is dead) or
-// is harmlessly retried on the next tick (if it was just slow). The
-// background goroutine is allowed to leak on timeout — it will exit
-// whenever the underlying filesystem call eventually returns.
+// cannot stall the monitor sweep. It reports a tri-state:
+//
+//   - a fast "healthy" return  -> healthOK
+//   - a fast "unhealthy" return -> healthDead (definitive: a real dead
+//     FUSE returns ENOTCONN immediately, it does not block)
+//   - a timeout                 -> healthSlow (busy under load; NOT dead)
+//
+// Only healthDead authorizes recovery. Collapsing a timeout into "dead"
+// (as the pre-fix code did) is exactly what let a slow-but-alive mount
+// be torn down under IO load. The background goroutine is allowed to
+// leak on timeout — it will exit whenever the underlying filesystem
+// call eventually returns.
 //
 // The inner goroutine has its own panic recovery so a crashing
-// isHealthyFn cannot take down the whole driver process.
-func (ns *NodeServer) checkHealth(path string) bool {
+// isHealthyFn cannot take down the whole driver process. A panic is
+// reported as healthDead (fast, definitive) so the caller does not wait
+// for the timeout.
+func (ns *NodeServer) checkHealth(path string) healthResult {
 	done := make(chan bool, 1)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				glog.Errorf("health monitor: health check for %s panicked: %v\n%s", path, r, debug.Stack())
-				// Treat a panic as unhealthy and unblock the caller
-				// so it does not have to wait for the timeout. The
-				// channel is buffered (size 1) and no prior send has
-				// happened on this path, so this non-blocking send
-				// is always safe.
 				select {
 				case done <- false:
 				default:
@@ -80,12 +127,16 @@ func (ns *NodeServer) checkHealth(path string) bool {
 		}()
 		done <- ns.isHealthyFn(path)
 	}()
+	timeout := ns.checkTimeout()
 	select {
 	case result := <-done:
-		return result
-	case <-time.After(defaultHealthCheckTimeout):
-		glog.Warningf("health monitor: health check for %s timed out after %v, treating as unhealthy", path, defaultHealthCheckTimeout)
-		return false
+		if result {
+			return healthOK
+		}
+		return healthDead
+	case <-time.After(timeout):
+		glog.Warningf("health monitor: health check for %s timed out after %v; treating as slow (busy), NOT dead — will retry", path, timeout)
+		return healthSlow
 	}
 }
 
@@ -150,7 +201,16 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 		return
 	}
 
-	if !ns.checkHealth(vol.StagedPath) {
+	switch ns.checkHealth(vol.StagedPath) {
+	case healthSlow:
+		// Busy under IO load, not dead. Reset the consecutive-death
+		// counter — a timeout is not evidence of death — and leave the
+		// live mount completely alone. Tearing it down here is the bug
+		// that handed running pods "Transport endpoint is not connected".
+		vol.healthFailCount.Store(0)
+		glog.Warningf("health monitor: staging mount for volume %s at %s is slow (health check timed out); not recovering", volumeID, vol.StagedPath)
+		return
+	case healthDead:
 		n := vol.healthFailCount.Add(1)
 		if n < defaultUnhealthyThreshold {
 			glog.Warningf("health monitor: staging mount for volume %s failed check %d/%d at %s", volumeID, n, defaultUnhealthyThreshold, vol.StagedPath)
@@ -180,7 +240,10 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 func (ns *NodeServer) hasUnhealthyPublishPath(vol *Volume) bool {
 	unhealthy := false
 	vol.publishPaths.Range(func(k, _ interface{}) bool {
-		if !ns.checkHealth(k.(string)) {
+		// Only a definitively dead publish bind mount needs re-binding.
+		// A slow probe (healthSlow) is the mount being busy, not gone —
+		// re-binding it would unmount a live path under a running pod.
+		if ns.checkHealth(k.(string)) == healthDead {
 			unhealthy = true
 			return false
 		}
@@ -204,9 +267,10 @@ func (ns *NodeServer) retryPublishPaths(volumeID string) {
 	}
 	vol := val.(*Volume)
 
-	// If staging has died since the sweep, let the next tick's
-	// full-recovery path handle it instead of fighting the race here.
-	if !ns.checkHealth(vol.StagedPath) {
+	// If staging has definitively died since the sweep, let the next
+	// tick's full-recovery path handle it instead of fighting the race
+	// here. A slow (busy) staging mount is left alone.
+	if ns.checkHealth(vol.StagedPath) == healthDead {
 		glog.Infof("health monitor: staging for volume %s became unhealthy before publish retry; deferring to full recovery", volumeID)
 		return
 	}
@@ -214,7 +278,9 @@ func (ns *NodeServer) retryPublishPaths(volumeID string) {
 	vol.publishPaths.Range(func(k, v interface{}) bool {
 		path := k.(string)
 		readOnly := v.(bool)
-		if ns.checkHealth(path) {
+		// Only re-bind a definitively dead publish path. Leave healthy
+		// and merely-slow (busy) paths untouched.
+		if ns.checkHealth(path) != healthDead {
 			return true
 		}
 		glog.Warningf("health monitor: re-binding publish path %s for volume %s", path, volumeID)
@@ -252,9 +318,14 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 	}
 	vol := val.(*Volume)
 
-	// Re-check health after acquiring lock
-	if ns.checkHealth(vol.StagedPath) {
-		glog.Infof("health monitor: volume %s is now healthy, skipping recovery", volumeID)
+	// Re-check health after acquiring lock. Recovery tears down the
+	// staging FUSE and every publish bind mount, so it must only run
+	// when the mount is *confirmed dead*. If the re-check comes back
+	// healthy (recovered on its own) or slow (busy under load, not
+	// dead), abort — tearing down a live mount here is precisely what
+	// gives a running pod "Transport endpoint is not connected".
+	if r := ns.checkHealth(vol.StagedPath); r != healthDead {
+		glog.Infof("health monitor: volume %s no longer confirmed dead (state=%s), skipping recovery", volumeID, r)
 		return
 	}
 
