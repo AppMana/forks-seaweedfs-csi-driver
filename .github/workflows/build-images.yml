@@ -13,10 +13,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/appmana
-  IMAGE_TAG: v1.4.12-appmana.post.8
+  IMAGE_TAG: v1.4.12-appmana.post.9
   # Pinned forks-seaweedfs commit providing weed.exe (WinFsp mount) and
   # the weed linux binary; must have passed the forks-seaweedfs workflow.
-  SEAWEEDFS_COMMIT: 8ed69ce48cb5323472ee7695ee1e8b618b5f8d3b
+  SEAWEEDFS_COMMIT: e3a7b708b8b8950c909e46d94300a582b2f7d360
 
 jobs:
   metadata:
