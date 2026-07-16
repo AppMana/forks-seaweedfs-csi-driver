@@ -3,6 +3,7 @@ package driver
 import (
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
@@ -70,11 +71,42 @@ func (ns *NodeServer) recoverStagedVolumesFromDisk(scanDir string) {
 		// recoverVolume refuses nil contexts; an empty context lets the
 		// health monitor re-stage with handle-derived defaults.
 		vol.volContext = map[string]string{}
+		ns.recoverPublishPathsFromDisk(scanDir, vd.VolumeHandle, vol)
 		ns.volumes.Store(vd.VolumeHandle, vol)
 		if ns.checkHealth(stagingPath) == healthOK {
 			glog.Infof("staging recovery: volume %s healthy at %s, tracking", vd.VolumeHandle, stagingPath)
 		} else {
 			glog.Warningf("staging recovery: volume %s unhealthy at %s, health monitor will re-stage", vd.VolumeHandle, stagingPath)
 		}
+	}
+}
+
+// recoverPublishPathsFromDisk restores the pod bind mounts associated with a
+// staged volume. Kubelet does not replay NodePublishVolume after a node-plugin
+// restart when the target path still exists, even when its FUSE transport is
+// disconnected. Tracking these paths lets the health monitor re-bind them
+// after it recreates the staging mount.
+func (ns *NodeServer) recoverPublishPathsFromDisk(scanDir, volumeID string, vol *Volume) {
+	kubeletRoot := filepath.Clean(filepath.Join(scanDir, "..", "..", ".."))
+	podsDir := filepath.Join(kubeletRoot, "pods")
+	pods, err := os.ReadDir(podsDir)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			glog.Warningf("staging recovery: cannot read pod mounts under %s: %v", podsDir, err)
+		}
+		return
+	}
+
+	volumeName := path.Base(filepath.ToSlash(volumeID))
+	for _, pod := range pods {
+		if !pod.IsDir() {
+			continue
+		}
+		publishPath := filepath.Join(podsDir, pod.Name(), "volumes", "kubernetes.io~csi", volumeName, "mount")
+		if _, err := os.Lstat(publishPath); err != nil && !isCorruptedMount(err) {
+			continue
+		}
+		vol.AddPublishPath(publishPath, false)
+		glog.Infof("staging recovery: volume %s tracking publish path %s", volumeID, publishPath)
 	}
 }
