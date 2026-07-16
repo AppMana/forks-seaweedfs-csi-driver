@@ -31,8 +31,9 @@ func skipIfNotRoot(t *testing.T) {
 }
 
 // TestIntegrationRemountViaSetns creates a child process in a separate
-// mount namespace, mounts a tmpfs inside it, then uses remountViaSetns
-// to replace that mount with a bind from a different directory.
+// mount namespace, hides the replacement source pathname inside that
+// namespace, then uses remountViaSetns to replace the mount through a
+// source descriptor opened in the caller's namespace.
 func TestIntegrationRemountViaSetns(t *testing.T) {
 	skipIfNotRoot(t)
 
@@ -61,8 +62,8 @@ func TestIntegrationRemountViaSetns(t *testing.T) {
 	readyFile := filepath.Join(root, "child.ready")
 	child := exec.Command("unshare", "--mount", "--propagation", "private",
 		"sh", "-c", fmt.Sprintf(
-			`mount --bind %s %s && echo $$ > %s && touch %s && sleep 60`,
-			originalDir, childMountpoint, pidFile, readyFile,
+			`mount --bind %s %s && mount -t tmpfs tmpfs %s && echo $$ > %s && touch %s && sleep 60`,
+			originalDir, childMountpoint, replacementDir, pidFile, readyFile,
 		))
 	child.SysProcAttr = &syscall.SysProcAttr{
 		Pdeathsig: syscall.SIGKILL,

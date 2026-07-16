@@ -320,6 +320,17 @@ func isStaleMount(err error) bool {
 // If readOnly is true, a second remount is performed with MS_RDONLY to
 // preserve the original read-only semantics of the volume mount.
 func remountViaSetns(containerPID int, containerMountPath, stagingPath string, readOnly bool) error {
+	// Clone the source mount before switching namespaces. The CSI
+	// container's hostPath at stagingPath is not necessarily visible by
+	// that pathname in the application container's mount namespace.
+	// open_tree creates a detached mount object that move_mount can attach
+	// after setns without resolving the source pathname again.
+	stagingFD, err := unix.OpenTree(unix.AT_FDCWD, stagingPath, unix.OPEN_TREE_CLONE|unix.OPEN_TREE_CLOEXEC)
+	if err != nil {
+		return fmt.Errorf("clone staging mount %s: %w", stagingPath, err)
+	}
+	defer unix.Close(stagingFD)
+
 	// Pin this goroutine to the current OS thread for the duration of
 	// the namespace switch. No other goroutine will be scheduled on
 	// this thread, preventing accidental cross-namespace operations.
@@ -378,8 +389,8 @@ func remountViaSetns(containerPID int, containerMountPath, stagingPath string, r
 	// which is accessible from inside the container's mount namespace
 	// because both the CSI driver and pod containers share the same
 	// host filesystem root for kubelet paths.
-	if err := unix.Mount(stagingPath, containerMountPath, "", unix.MS_BIND, ""); err != nil {
-		return fmt.Errorf("bind mount %s -> %s in container PID %d: %w", stagingPath, containerMountPath, containerPID, err)
+	if err := unix.MoveMount(stagingFD, "", unix.AT_FDCWD, containerMountPath, unix.MOVE_MOUNT_F_EMPTY_PATH); err != nil {
+		return fmt.Errorf("move cloned mount %s -> %s in container PID %d: %w", stagingPath, containerMountPath, containerPID, err)
 	}
 
 	// A bind mount created with MS_BIND ignores MS_RDONLY in the same

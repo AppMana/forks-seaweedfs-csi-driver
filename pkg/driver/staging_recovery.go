@@ -102,9 +102,24 @@ func (ns *NodeServer) recoverPublishPathsFromDisk(scanDir, volumeID string, vol 
 		if !pod.IsDir() {
 			continue
 		}
-		publishPath := filepath.Join(podsDir, pod.Name(), "volumes", "kubernetes.io~csi", volumeName, "mount")
+		volumeDir := filepath.Join(podsDir, pod.Name(), "volumes", "kubernetes.io~csi", volumeName)
+		publishPath := filepath.Join(volumeDir, "mount")
 		if _, err := os.Lstat(publishPath); err != nil && !isCorruptedMount(err) {
-			continue
+			// A partial recovery may already have removed the dead mount
+			// child. Kubelet still owns the publish and records its identity
+			// beside that child, so recover it from vol_data.json instead of
+			// waiting for a NodePublish call that kubelet will not replay.
+			data, readErr := os.ReadFile(filepath.Join(volumeDir, "vol_data.json"))
+			if readErr != nil {
+				continue
+			}
+			var vd kubeletVolData
+			if json.Unmarshal(data, &vd) != nil || vd.VolumeHandle != volumeID {
+				continue
+			}
+			if vd.DriverName != "" && vd.DriverName != ns.Driver.name {
+				continue
+			}
 		}
 		vol.AddPublishPath(publishPath, false)
 		glog.Infof("staging recovery: volume %s tracking publish path %s", volumeID, publishPath)

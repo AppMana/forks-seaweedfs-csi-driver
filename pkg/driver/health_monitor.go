@@ -456,9 +456,11 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 	// publish whose host side is healthy but whose containers still see
 	// the old mount would never be picked up by retryPublishPaths on
 	// later sweeps.
-	if oldDevice != "" {
-		for _, p := range recovered {
+	for _, p := range recovered {
+		if oldDevice != "" {
 			remountInContainers(p.path, stagingPath, oldDevice, p.readOnly)
+		} else {
+			remountStaleFuseInContainers(p.path, stagingPath, p.readOnly)
 		}
 	}
 
