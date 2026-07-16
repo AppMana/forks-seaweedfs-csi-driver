@@ -4,7 +4,7 @@
 #     -f cmd/seaweedfs-mount/Dockerfile.Windows .
 
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=748d498803fe36c407575b24bc52daa3700edecc
+ARG SEAWEEDFS_COMMIT=4cb8ee3b843438f814536d70d39974e4c2636313
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG WINFSP_MSI_URL=https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi
