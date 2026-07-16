@@ -53,3 +53,29 @@ func TestBuildMountArgsReaderCacheMode(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildMountArgsWinFspOptions(t *testing.T) {
+	m := &mountServiceMounter{
+		driver: &SeaweedFsDriver{
+			ConcurrentReaders: 128,
+			ConcurrentWriters: 128,
+		},
+		volumeID: "/buckets/test-volume",
+		volContext: map[string]string{
+			"winfspOptions": "FileInfoTimeout=60000,DirInfoTimeout=60000",
+		},
+	}
+
+	args, err := m.buildMountArgs("/mnt/target", "/var/cache/seaweedfs/abc", "unix:///tmp/sock", []string{"localhost:8888"})
+	if err != nil {
+		t.Fatalf("buildMountArgs: %v", err)
+	}
+
+	want := "-winfspOptions=FileInfoTimeout=60000,DirInfoTimeout=60000"
+	for _, arg := range args {
+		if arg == want {
+			return
+		}
+	}
+	t.Fatalf("expected %q in args, got %v", want, args)
+}
