@@ -72,6 +72,7 @@ func configureCmd(cmd *exec.Cmd) {
 	if opts := os.Getenv("SEAWEEDFS_WINFSP_OPTIONS"); opts != "" {
 		cmd.Args = append(cmd.Args, "-winfspOptions="+opts)
 	}
+	cmd.Args = append(cmd.Args, winFspCaseSensitivityArgs(os.Getenv)...)
 }
 
 // afterStart assigns the freshly started weed mount process to a

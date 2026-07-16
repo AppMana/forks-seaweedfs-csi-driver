@@ -1,7 +1,7 @@
 # SEAWEEDFS_COMMIT should match the commit in go.mod for reproducibility
 # Update via: docker build --build-arg SEAWEEDFS_COMMIT=<hash> ...
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=8ed69ce48cb5323472ee7695ee1e8b618b5f8d3b
+ARG SEAWEEDFS_COMMIT=56f1a32b92b687f9c97b113646332971a8cfd709
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 

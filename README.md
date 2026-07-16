@@ -127,6 +127,10 @@ DaemonSet for **read-mostly** volumes (model caches etc.) to enable kernel
 data caching — a large small-read speedup, but unsafe for volumes that see
 delete-then-recreate patterns (see `forks-seaweedfs/WINDOWS_PORT.md`).
 
+Windows mounts are case-insensitive by default. Set
+`SEAWEEDFS_WINFSP_CASE_SENSITIVE=true` on the mount DaemonSet only when a
+workload requires the filer namespace's case-sensitive behavior.
+
 `hack/appmana/` contains the kind + QEMU-Windows e2e harness (cross-OS RWX
 matrix and resilience drills) and the CI mount benchmark.
 
