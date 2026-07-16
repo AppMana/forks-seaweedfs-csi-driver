@@ -35,6 +35,7 @@ type fakeMountState struct {
 	stageCalls       int
 	unstageCalls     int
 	cleanupCalls     int
+	detachCalls      int
 	unmountCalls     int
 	bindMountCalls   int
 	bindMountTargets []string
@@ -120,6 +121,12 @@ func newNodeServerWithFakes(t *testing.T, state *fakeMountState) *NodeServer {
 			// mirroring real cleanup behavior.
 			return os.RemoveAll(path)
 		},
+		detachStagingFn: func(path string) error {
+			state.mu.Lock()
+			state.detachCalls++
+			state.mu.Unlock()
+			return nil
+		},
 		unmountFn: func(path string) error {
 			state.mu.Lock()
 			state.unmountCalls++
@@ -137,6 +144,38 @@ func newNodeServerWithFakes(t *testing.T, state *fakeMountState) *NodeServer {
 		},
 	}
 	return ns
+}
+
+// TestHealthMonitorDetachesReconstructedDeadMount covers recovery after the
+// mount daemon restarts independently from the CSI node plugin. The volume is
+// reconstructed from kubelet state and therefore has no manager unmounter;
+// the confirmed-dead kernel FUSE mount must be detached before re-staging.
+func TestHealthMonitorDetachesReconstructedDeadMount(t *testing.T) {
+	state := newFakeMountState()
+	ns := newNodeServerWithFakes(t, state)
+
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	if err := os.MkdirAll(stagingPath, 0755); err != nil {
+		t.Fatalf("mkdir staging: %v", err)
+	}
+	vol := ns.rebuildVolumeFromStaging("vol-1", stagingPath)
+	vol.volContext = map[string]string{}
+	ns.volumes.Store("vol-1", vol)
+	state.healthy.Store(false)
+
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.detachCalls != 1 {
+		t.Fatalf("expected one dead staging detach, got %d", state.detachCalls)
+	}
+	if state.stageCalls != 1 {
+		t.Fatalf("expected reconstructed volume to be re-staged once, got %d", state.stageCalls)
+	}
 }
 
 // TestHealthMonitorRecoversStaleMount is the integration test for

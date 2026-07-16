@@ -37,6 +37,7 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 		capacityFn:       k8s.GetVolumeCapacity,
 		isHealthyFn:      isStagingPathHealthy,
 		cleanupStagingFn: cleanupStaleStagingPath,
+		detachStagingFn:  detachDeadMountPoint,
 		unmountFn:        unmountVolume,
 		bindMountFn:      defaultBindMount,
 	}

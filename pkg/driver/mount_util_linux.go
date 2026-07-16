@@ -9,10 +9,19 @@ import (
 	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"golang.org/x/sys/unix"
 	"k8s.io/mount-utils"
 )
 
 var mountutil = mount.New("")
+
+func detachDeadMountPoint(path string) error {
+	err := unix.Unmount(path, unix.MNT_DETACH)
+	if errors.Is(err, unix.EINVAL) || errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	return err
+}
 
 // isStagingPathHealthy checks if the staging path has a healthy FUSE mount.
 // It returns true if the path is mounted and accessible, false otherwise.

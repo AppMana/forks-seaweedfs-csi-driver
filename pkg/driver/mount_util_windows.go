@@ -152,6 +152,10 @@ func unmountVolume(path string) error {
 	return removeMountArtifact(path)
 }
 
+func detachDeadMountPoint(path string) error {
+	return removeMountArtifact(path)
+}
+
 // cleanupMountPoint removes the symlink (publish path) or dangling
 // reparse point at path. It tolerates the path not existing.
 func cleanupMountPoint(path string) error {

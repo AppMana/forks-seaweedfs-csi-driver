@@ -59,6 +59,7 @@ type NodeServer struct {
 	capacityFn       CapacityFn
 	isHealthyFn      HealthCheckFn
 	cleanupStagingFn func(stagingPath string) error
+	detachStagingFn  func(stagingPath string) error
 	unmountFn        func(path string) error
 	bindMountFn      BindMountFn
 
