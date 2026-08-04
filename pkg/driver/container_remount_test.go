@@ -5,6 +5,7 @@ package driver
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,82 @@ func TestParseMountInfoFromFile(t *testing.T) {
 	}
 	if !isFuseFS(entries[3].fstype) {
 		t.Error("fuse should be fuse")
+	}
+}
+
+// TestParseMountInfoReaderCapturesRoot verifies the mountinfo root field
+// (field 4, the subPath offset) is parsed. Regression guard for #271:
+// dropping this field is what made subPath mounts re-bind to the share
+// root after FUSE recovery.
+func TestParseMountInfoReaderCapturesRoot(t *testing.T) {
+	// Two binds of the same FUSE device: a plain mount (root "/") and a
+	// subPath mount (root "/store").
+	content := `100 50 0:55 / /var/lib/kubelet/pods/uid/volumes/kubernetes.io~csi/pv/mount rw,relatime - fuse.seaweedfs seaweedfs rw,user_id=0,group_id=0
+101 50 0:55 /store /var/lib/kubelet/pods/uid/volume-subpaths/pv/ctr/0 rw,nosuid,nodev,relatime - fuse.seaweedfs seaweedfs rw,user_id=0,group_id=0
+`
+	entries, err := parseMountInfoReader(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parseMountInfoReader: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if entries[0].root != "/" {
+		t.Errorf("plain mount: root = %q, want %q", entries[0].root, "/")
+	}
+	if entries[1].root != "/store" {
+		t.Errorf("subPath mount: root = %q, want %q", entries[1].root, "/store")
+	}
+	for i, e := range entries {
+		if e.device != "0:55" {
+			t.Errorf("entry %d: device = %q, want 0:55", i, e.device)
+		}
+		if !isFuseFS(e.fstype) {
+			t.Errorf("entry %d: fstype %q not recognized as fuse", i, e.fstype)
+		}
+	}
+}
+
+// TestParseMountInfoReaderUnescapesOctal verifies that octal escapes in
+// the root and mountpoint fields (util-linux escapes space/tab/newline/
+// backslash) are decoded, so a subPath containing a space binds the right
+// subdirectory after recovery instead of failing or dropping the offset.
+func TestParseMountInfoReaderUnescapesOctal(t *testing.T) {
+	// subPath "my store" -> root "/my\040store"; mountpoint also has a space.
+	content := "200 50 0:55 /my\\040store /var/lib/kubelet/pods/uid/a\\040b rw,relatime - fuse.seaweedfs seaweedfs rw\n"
+	entries, err := parseMountInfoReader(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parseMountInfoReader: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].root != "/my store" {
+		t.Errorf("root = %q, want %q", entries[0].root, "/my store")
+	}
+	if entries[0].mountpoint != "/var/lib/kubelet/pods/uid/a b" {
+		t.Errorf("mountpoint = %q, want %q", entries[0].mountpoint, "/var/lib/kubelet/pods/uid/a b")
+	}
+}
+
+func TestUnescapeMountField(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"/", "/"},
+		{"/store", "/store"},
+		{"/my\\040store", "/my store"},        // space
+		{"/a\\011b", "/a\tb"},                  // tab
+		{"/a\\012b", "/a\nb"},                  // newline
+		{"/a\\134b", "/a\\b"},                  // backslash
+		{"/a\\040b\\040c", "/a b c"},           // multiple
+		{"/trailing\\04", "/trailing\\04"},     // incomplete escape left verbatim
+		{"/not\\888escape", "/not\\888escape"}, // non-octal digits left verbatim
+	}
+	for _, tt := range tests {
+		if got := unescapeMountField(tt.in); got != tt.want {
+			t.Errorf("unescapeMountField(%q) = %q, want %q", tt.in, got, tt.want)
+		}
 	}
 }
 

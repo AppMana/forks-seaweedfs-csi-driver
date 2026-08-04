@@ -342,6 +342,70 @@ func TestHealthMonitorAbortsOnUnmounterError(t *testing.T) {
 	}
 }
 
+// Pins the invariant: publish binds must not be torn down until
+// re-staging has succeeded, so a failed re-stage leaves the (broken)
+// binds in place rather than leaving kubelet seeing empty publish paths.
+func TestHealthMonitorPreservesPublishesOnReStageFailure(t *testing.T) {
+	state := newFakeMountState()
+	ns := newNodeServerWithFakes(t, state)
+
+	root := t.TempDir()
+	stagingPath := filepath.Join(root, "staging")
+	publishPath := filepath.Join(root, "pod", "mount")
+	volCtx := map[string]string{"collection": "c"}
+
+	vol, err := ns.stageNewVolume("vol-1", stagingPath, volCtx, false)
+	if err != nil {
+		t.Fatalf("stageNewVolume: %v", err)
+	}
+	vol.volContext = volCtx
+	if err := vol.Publish(stagingPath, publishPath, false); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	vol.AddPublishPath(publishPath, false)
+	ns.volumes.Store("vol-1", vol)
+
+	bindMountsBefore := state.bindMountCalls
+	unmountsBefore := state.unmountCalls
+
+	// Swap in a failing factory so the recovery's stageNewVolume errors
+	// (the first factory call above already succeeded).
+	wantErr := errors.New("simulated re-stage failure")
+	ns.mounterFactory = func(volumeID string, readOnly bool, driver *SeaweedFsDriver, volContext map[string]string) (Mounter, error) {
+		return nil, wantErr
+	}
+
+	state.healthy.Store(false)
+
+	for i := 0; i < defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.unstageCalls != 1 {
+		t.Errorf("expected 1 manager unmount during failed recovery, got %d", state.unstageCalls)
+	}
+	if state.cleanupCalls != 1 {
+		t.Errorf("expected 1 staging cleanup during failed recovery, got %d", state.cleanupCalls)
+	}
+	if state.unmountCalls != unmountsBefore {
+		t.Errorf("publish bind mounts must not be unmounted when re-stage fails, got %d unmounts (expected %d)", state.unmountCalls, unmountsBefore)
+	}
+	if state.bindMountCalls != bindMountsBefore {
+		t.Errorf("expected no new bind mounts when re-stage fails, got %d (was %d)", state.bindMountCalls, bindMountsBefore)
+	}
+	got, ok := ns.volumes.Load("vol-1")
+	if !ok {
+		t.Fatal("volume removed from map after failed recovery")
+	}
+	if got.(*Volume) != vol {
+		t.Error("expected original volume preserved after failed recovery")
+	}
+}
+
 // TestHealthMonitorSkipsHealthyVolumes verifies the monitor does not
 // disrupt volumes whose FUSE mount is still alive.
 func TestHealthMonitorSkipsHealthyVolumes(t *testing.T) {

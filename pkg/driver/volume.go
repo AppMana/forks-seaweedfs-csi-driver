@@ -14,6 +14,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+const volumeCapacityKey = "volumeCapacity"
+
 type Volume struct {
 	VolumeId   string
 	StagedPath string
