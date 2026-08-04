@@ -14,9 +14,17 @@ sync:
     tags:
       allow:
         - "v1\\.4\\.12-appmana\\.post\\..*"
+        - "v1\\.4\\.26-appmana\\.post\\..*"
   - source: ghcr.io/appmana/seaweedfs-mount
     target: harbor.appmana.com/appmana/seaweedfs-mount
     type: repository
     tags:
       allow:
         - "v1\\.4\\.12-appmana\\.post\\..*"
+        - "v1\\.4\\.26-appmana\\.post\\..*"
+  - source: ghcr.io/appmana/seaweedfs
+    target: harbor.appmana.com/appmana/seaweedfs
+    type: repository
+    tags:
+      allow:
+        - "4\\.40-appmana\\.post\\..*_large_disk"
