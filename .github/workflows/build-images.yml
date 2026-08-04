@@ -2,9 +2,9 @@ name: Build, test, and publish CSI driver images
 
 on:
   push:
-    branches: [appmana/windows-v1.4.12]
+    branches: [appmana/windows-v1.4.12, 'merge/**']
   pull_request:
-    branches: [appmana/windows-v1.4.12]
+    branches: [appmana/windows-v1.4.12, 'merge/**']
   workflow_dispatch:
 
 permissions:
@@ -13,10 +13,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/appmana
-  IMAGE_TAG: v1.4.12-appmana.post.20
+  IMAGE_TAG: v1.4.26-appmana.post.1
   # Pinned forks-seaweedfs commit providing weed.exe (WinFsp mount) and
   # the weed linux binary; must have passed the forks-seaweedfs workflow.
-  SEAWEEDFS_COMMIT: 40e62525626151b5758c2aec743a8e88e39794e6
+  SEAWEEDFS_COMMIT: c66909247ef2cbae6beb69528ef10a71c7b38984
 
 jobs:
   metadata:
