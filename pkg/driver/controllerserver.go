@@ -14,6 +14,7 @@ import (
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/seaweedfs/seaweedfs/weed/glog"
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3bucket"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -88,7 +89,16 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		params[volumeCapacityKey] = strconv.FormatInt(capacity, 10)
 	}
 
-	if err := filer_pb.Mkdir(ctx, cs.Driver, parentDir, volumeName, nil); err != nil {
+	if err := filer_pb.Mkdir(ctx, cs.Driver, parentDir, volumeName, func(entry *filer_pb.Entry) {
+		// A volume holds real directories. Record that on the bucket so the
+		// filer's empty-folder cleaner, which removes implicit S3 folders once
+		// their last object is deleted, never touches it: it would otherwise
+		// delete a directory between mkdir and the first file landing in it.
+		if entry.Extended == nil {
+			entry.Extended = make(map[string][]byte)
+		}
+		entry.Extended[s3_constants.ExtAllowEmptyFolders] = []byte("true")
+	}); err != nil {
 		return nil, fmt.Errorf("error creating volume: %v", err)
 	}
 
