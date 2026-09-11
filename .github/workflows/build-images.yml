@@ -16,7 +16,7 @@ env:
   IMAGE_TAG: v1.4.26-appmana.post.2
   # Pinned forks-seaweedfs commit providing weed.exe (WinFsp mount) and
   # the weed linux binary; must have passed the forks-seaweedfs workflow.
-  SEAWEEDFS_COMMIT: ae8349b96eeeea178e559e99bc49a058ec9bec1e
+  SEAWEEDFS_COMMIT: 08e95eca88ac8b11f9d0759a25aeb33273d447cd
 
 jobs:
   metadata:
