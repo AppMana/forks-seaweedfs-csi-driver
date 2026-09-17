@@ -142,6 +142,7 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 	argsMap := map[string]string{
 		"collection":         collection,
 		"collectionQuotaMB":  initialCollectionQuotaMB(volumeContext[volumeCapacityKey]),
+		"df.logical":         "true",
 		"filer":              strings.Join(filers, ","),
 		"filer.path":         filerPath,
 		"cacheCapacityMB":    strconv.Itoa(m.driver.CacheCapacityMB),

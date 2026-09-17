@@ -29,6 +29,27 @@ func TestBuildMountArgsIncludesInitialCollectionQuota(t *testing.T) {
 	}
 }
 
+func TestBuildMountArgsUsesLogicalDiskUsageForQuota(t *testing.T) {
+	mounter := &mountServiceMounter{
+		driver:     &SeaweedFsDriver{},
+		volumeID:   "/buckets/test-volume",
+		volContext: map[string]string{},
+	}
+
+	args, err := mounter.buildMountArgs(
+		"/staging",
+		"/cache",
+		"/socket",
+		[]string{"filer:8888"},
+	)
+	if err != nil {
+		t.Fatalf("buildMountArgs: %v", err)
+	}
+	if !slices.Contains(args, "-df.logical=true") {
+		t.Fatalf("mount args do not enable logical disk usage: %v", args)
+	}
+}
+
 func TestInitialCollectionQuotaMBRoundsUp(t *testing.T) {
 	if got, want := initialCollectionQuotaMB("1048577"), "2"; got != want {
 		t.Fatalf("initialCollectionQuotaMB = %q, want %q", got, want)
