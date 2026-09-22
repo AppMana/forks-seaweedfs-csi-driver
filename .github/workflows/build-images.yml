@@ -72,7 +72,37 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Native windows unit tests (AF_UNIX canary, symlink publish, process supervision)
-        run: go test -count=1 -v ./pkg/driver/ ./pkg/mountmanager/
+        run: |
+          $log = Join-Path $env:RUNNER_TEMP 'windows-go-test.json'
+          & go test -count=1 -json ./pkg/driver/ ./pkg/mountmanager/ |
+            Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) {
+            throw "native Windows tests failed with exit $LASTEXITCODE"
+          }
+
+          $events = @(Get-Content $log | ForEach-Object { $_ | ConvertFrom-Json })
+          $skips = @($events | Where-Object { $_.Action -eq 'skip' -and $_.Test })
+          if ($skips.Count -ne 0) {
+            $names = ($skips.Test | Sort-Object -Unique) -join ', '
+            throw "native Windows tests skipped: $names"
+          }
+
+          $required = @(
+            'TestCheckMountMissingPath',
+            'TestCheckMountPlainDir',
+            'TestCheckMountSymlink',
+            'TestCleanupTolerateMissing',
+            'TestCleanupRemovesEmptyDirNonRecursively',
+            'TestDefaultBindMountReplacesEmptyDir',
+            'TestConfigureCmdSetsProcessGroup',
+            'TestStopKillsChild',
+            'TestUnixSocketRoundTrip'
+          )
+          $passed = @($events | Where-Object { $_.Action -eq 'pass' -and $_.Test } | ForEach-Object Test)
+          $missing = @($required | Where-Object { $_ -notin $passed })
+          if ($missing.Count -ne 0) {
+            throw "required native Windows tests did not run: $($missing -join ', ')"
+          }
 
   build-linux-images:
     runs-on: ubuntu-latest

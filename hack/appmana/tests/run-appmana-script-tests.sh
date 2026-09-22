@@ -566,6 +566,23 @@ EOF
 chmod +x "$FORWARDING_STUB" "$PREFLIGHT_STUB" "$CSI_PREFLIGHT_STUB" \
   "$DEPLOY_SEAWEEDFS_STUB" "$DEPLOY_CSI_STUB" "$RESILIENCE_STUB"
 
+echo ""
+echo "--- run-kind-qemu-storage-e2e.sh refuses production before forwarding ---"
+: > "$LOG"
+if APP_MOCK_CONTEXT="prod-cluster" \
+  FORWARDING_SCRIPT="$FORWARDING_STUB" PREFLIGHT_SCRIPT="$PREFLIGHT_STUB" \
+  CSI_PREFLIGHT_SCRIPT="$CSI_PREFLIGHT_STUB" \
+  DEPLOY_SEAWEEDFS_SCRIPT="$DEPLOY_SEAWEEDFS_STUB" \
+  DEPLOY_CSI_SCRIPT="$DEPLOY_CSI_STUB" \
+  HEALTH_CHECK_SCRIPT="$HEALTH_STUB" \
+  bash "$HACK/run-kind-qemu-storage-e2e.sh" > "$TMPDIR/e2e-guard.out" 2>&1; then
+  fail "run-kind-qemu-storage-e2e.sh ran against a non-lab context"
+else
+  pass "run-kind-qemu-storage-e2e.sh refused a non-lab context"
+fi
+assert_file_contains "$TMPDIR/e2e-guard.out" "refusing to run"
+assert_log_not_contains "forwarding"
+
 : > "$LOG"
 if FORWARDING_SCRIPT="$FORWARDING_STUB" PREFLIGHT_SCRIPT="$PREFLIGHT_STUB" \
   CSI_PREFLIGHT_SCRIPT="$CSI_PREFLIGHT_STUB" \

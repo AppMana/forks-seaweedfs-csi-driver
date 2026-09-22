@@ -18,6 +18,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 export KUBECONFIG="${KUBECONFIG:-/tmp/appmana-calico-kind/kubeconfig}"
+LAB_CONTEXT="${LAB_CONTEXT:-kind-appmana-calico}"
 
 CALICO_HACK_DIR="${CALICO_HACK_DIR:-$SCRIPT_DIR/../../../forks-calico-windows-ipv6/hack/appmana}"
 
@@ -42,6 +43,17 @@ if [[ $# -ge 1 ]]; then
 fi
 if [[ $# -ge 2 ]]; then
   WINDOWS_NODE="$2"
+fi
+
+if [[ ! -f "$KUBECONFIG" ]]; then
+  echo "ERROR: refusing to run: private lab kubeconfig not found at $KUBECONFIG." >&2
+  exit 1
+fi
+current_context=$(kubectl --kubeconfig "$KUBECONFIG" config current-context 2>/dev/null || true)
+if [[ "$current_context" != "$LAB_CONTEXT" ]]; then
+  echo "ERROR: refusing to run: kubectl context is '${current_context:-<none>}', expected the kind lab context '$LAB_CONTEXT'." >&2
+  echo "No forwarding or cluster mutation was attempted." >&2
+  exit 1
 fi
 
 if [[ "$APPLY_FORWARDING" == "true" ]]; then
