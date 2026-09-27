@@ -23,6 +23,22 @@ How it works on Windows:
 - WinFsp is installed on the host idempotently by an initContainer from the
   MSI shipped in the mount image.
 
+The Windows mount image currently pins upstream WinFsp **2.1.25156** using
+`WINFSP_MSI_URL` and `WINFSP_MSI_SHA256` in
+`cmd/seaweedfs-mount/Dockerfile.Windows`. WinFsp's DLL and kernel driver are
+host-installed components, not private copies inside each workload container.
+The bootstrap shown below only checks for an existing registry key: it does
+**not** verify or upgrade an existing installation when the image changes.
+Do not use a DaemonSet image rollout as a driver-upgrade mechanism.
+
+[AppMana/forks-winfsp-fixes](https://github.com/AppMana/forks-winfsp-fixes)
+contains the candidate fixes and isolated native-VM qualification harness.
+Its test-signed outputs are not production MSI replacements. A fork rollout
+requires a production-signed package, explicit MSI URL/checksum pins, and a
+drained-node installation/upgrade/rollback test with the actual network/UNC
+mount mode and pod workloads. DLL-only substitution cannot deploy a kernel
+fix. Keep test signing disabled on cluster hosts.
+
 **Large volumes:** the bundled `weed.exe`/`weed` binaries are the large-disk
 build (`-tags 5BytesOffset`, 5-byte needle offsets for 8TB volume files),
 matching clusters that run the upstream `*_large_disk` images.
