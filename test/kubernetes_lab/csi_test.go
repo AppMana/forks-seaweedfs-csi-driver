@@ -367,6 +367,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 	// A clean guest reboot is distinct from power loss. Require a new kernel
 	// boot ID, then ordinary-pod readiness and the full byte oracle again.
 	before := strings.TrimSpace(string(run("get", "node", "windows", "-o", "jsonpath={.status.nodeInfo.bootID}")))
+	beforeNetwork := captureWindowsNetwork(t)
 	if before == "" {
 		t.Fatal("missing Windows boot identity")
 	}
@@ -392,7 +393,24 @@ func TestCSIStockWinFsp(t *testing.T) {
 		t.Fatal("Windows did not return Ready with a different boot ID")
 	}
 	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=5m")
+	afterNetwork := captureWindowsNetwork(t)
+	assertNetworkPreserved(t, beforeNetwork, afterNetwork)
 	runPhase("verify-remount")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "verify")
+	// Readiness alone previously hid a sandbox that could never be deleted.
+	// Require normal teardown, actual HNS resource removal and fresh-pod reads.
+	run("delete", "pod", "-n", ns, clientName("windows"), "--wait=true", "--timeout=3m")
+	removed := `$namespace=` + psLiteral(afterNetwork.NamespaceID) + `; $endpoint=` + psLiteral(afterNetwork.EndpointID) + `;
+if(@(Get-HnsNamespace | Where-Object {$_.ID -eq $namespace}).Count){throw 'deleted pod left its HNS namespace'};
+if(@(Get-HnsEndpoint | Where-Object {$_.ID -eq $endpoint}).Count){throw 'deleted pod left its HNS endpoint'};
+Write-Output 'CSI_SANDBOX_TEARDOWN_COMPLETE'`
+	out := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(removed)...)...)
+	if !strings.Contains(string(out), "CSI_SANDBOX_TEARDOWN_COMPLETE") {
+		t.Fatal("missing sandbox teardown evidence")
+	}
+	apply(clientPod("windows"))
+	run("wait", "-n", ns, "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=5m")
+	captureWindowsNetwork(t)
+	runPhase("verify-remount")
 	fmt.Println("CSI_QUALIFICATION_COMPLETE")
 }
