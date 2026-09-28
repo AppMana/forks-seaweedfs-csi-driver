@@ -28,6 +28,8 @@ var live = flag.Bool("csi-live", false, "run only inside the disposable Labconta
 var smokeSource = flag.String("mount-smoke-source", "/mnt/qualification/mount-smoke.ps1", "existing SeaweedFS Git LFS regression source on hash-pinned offline media")
 var clientRun = flag.String("csi-client-run", "", "explicit client name suffix for independent A/B runs; never repairs or replaces a failed run")
 var nativeTestExecutable = flag.String("csi-native-test-executable", `C:\tools\winfsp-csi.test.exe`, "explicit native test input in the CSI client's read-only tools share")
+var candidateManifestPath = flag.String("csi-candidate-manifest", "", "explicit lab-only WinFsp candidate build manifest")
+var candidateManifestSHA256 = flag.String("csi-candidate-manifest-sha256", "", "immutable SHA-256 of the candidate build manifest")
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
@@ -75,6 +77,9 @@ func daemon(p core.Pod) apps.DaemonSet {
 	return apps.DaemonSet{TypeMeta: meta.TypeMeta{APIVersion: "apps/v1", Kind: "DaemonSet"}, ObjectMeta: p.ObjectMeta, Spec: apps.DaemonSetSpec{Selector: &meta.LabelSelector{MatchLabels: p.Labels}, Template: core.PodTemplateSpec{ObjectMeta: meta.ObjectMeta{Labels: p.Labels}, Spec: p.Spec}}}
 }
 func nodePod(platform string, mount bool) core.Pod {
+	return nodePodForQualification(platform, mount, false)
+}
+func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 	name := "node-" + platform
 	if mount {
 		name = "mount-" + platform
@@ -122,8 +127,17 @@ func nodePod(platform string, mount bool) core.Pod {
 	} else {
 		if mount {
 			p.Spec.Containers[0].Env = append(p.Spec.Containers[0].Env, core.EnvVar{Name: "WEED_WINFSP_VOLUME_PREFIX", Value: `\seaweedfs`})
-			p.Spec.InitContainers = []core.Container{container("install-stock", image, ps(`if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" C:\Windows\Temp\winfsp.msi; $p=Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000'; if($p.ExitCode -ne 0){throw "MSI exit $($p.ExitCode)"} }; New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`))}
-			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", image, ps(`Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs; $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing stock WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`)))
+			prepare := `if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" C:\Windows\Temp\winfsp.msi; $p=Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000'; if($p.ExitCode -ne 0){throw "MSI exit $($p.ExitCode)"} };`
+			name := "install-stock"
+			if candidate {
+				// Candidate installation and reboot are an explicit lab prerequisite.
+				// Never let image initialization replace it with the stock MSI.
+				prepare = `if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { throw 'prepared candidate WinFsp installation missing' };`
+				name = "require-candidate"
+			}
+			prepare += ` New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`
+			p.Spec.InitContainers = []core.Container{container(name, image, ps(prepare))}
+			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", image, ps(`Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs; $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`)))
 		} else {
 			p.Spec.InitContainers = []core.Container{container("directories", image, ps(`New-Item -ItemType Directory -Force '`+root+`\plugins\`+driver+`' | Out-Null`))}
 			p.Spec.Containers = append(p.Spec.Containers, container("registrar", windowsRegistrar, []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
@@ -154,7 +168,8 @@ func clientPod(platform string) core.Pod {
 	}
 	return p
 }
-func objects() []any {
+func objects() []any { return objectsForQualification(false) }
+func objectsForQualification(candidate bool) []any {
 	o := []any{core.Namespace{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "Namespace"}, ObjectMeta: meta.ObjectMeta{Name: ns}}, core.ServiceAccount{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"}, ObjectMeta: metadata("csi")}}
 	// These privileges match the provisioner/attacher/resizer and node responsibilities;
 	// no cluster-admin binding or credentials leave the disposable controller VM.
@@ -197,7 +212,7 @@ func objects() []any {
 	}
 	o = append(o, controller)
 	for _, platform := range []string{"linux", "windows"} {
-		o = append(o, daemon(nodePod(platform, true)), daemon(nodePod(platform, false)))
+		o = append(o, daemon(nodePodForQualification(platform, true, candidate)), daemon(nodePodForQualification(platform, false, candidate)))
 	}
 	o = append(o, core.PersistentVolumeClaim{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "PersistentVolumeClaim"}, ObjectMeta: metadata("shared"), Spec: core.PersistentVolumeClaimSpec{StorageClassName: ptr(ns), AccessModes: []core.PersistentVolumeAccessMode{core.ReadWriteMany}, Resources: core.VolumeResourceRequirements{Requests: core.ResourceList{core.ResourceStorage: resource.MustParse("1Gi")}}}})
 	return o
@@ -246,6 +261,22 @@ func TestClientRunNamesRemainScoped(t *testing.T) {
 	}
 }
 func TestCSIStockWinFsp(t *testing.T) {
+	runCSIQualification(t, nil)
+}
+
+func TestCSICandidateWinFsp(t *testing.T) {
+	if !*live {
+		t.Skip("requires disposable mixed-platform Labcontainers Kubernetes fixture")
+	}
+	manifest, err := loadCandidateManifest(*candidateManifestPath, *candidateManifestSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCSIQualification(t, &manifest)
+}
+
+func runCSIQualification(t *testing.T, candidate *candidateManifest) {
+	t.Helper()
 	if !*live {
 		t.Skip("requires disposable mixed-platform Labcontainers Kubernetes fixture")
 	}
@@ -289,7 +320,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, o := range objects() {
+	for _, o := range objectsForQualification(candidate != nil) {
 		apply(o)
 	}
 	for _, platform := range []string{"linux", "windows"} {
@@ -309,9 +340,14 @@ func TestCSIStockWinFsp(t *testing.T) {
 	testLinuxRoot := "/data/qualification-" + token
 	testWindowsRoot := `C:\data\qualification-` + token
 	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
-	stockEvidence := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(stockAttestation)...)...)
-	if !strings.Contains(string(stockEvidence), "STOCK_WINFSP_ATTESTED") {
-		t.Fatal("missing stock-driver evidence")
+	attestation, marker := stockAttestation, "STOCK_WINFSP_ATTESTED"
+	if candidate != nil {
+		attestation = candidateAttestation(*candidate)
+		marker = "CANDIDATE_WINFSP_ATTESTED:" + candidate.DriverSourceRevision + ":" + candidate.DriverSourceArchiveSHA256
+	}
+	driverEvidence := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(attestation)...)...)
+	if !strings.Contains(string(driverEvidence), marker) {
+		t.Fatal("missing exact WinFsp driver evidence")
 	}
 	// Execute the existing regression function, not its standalone mount bootstrap.
 	// Parsing the AST selects exactly the two named functions without dot-sourcing
@@ -340,7 +376,11 @@ func TestCSIStockWinFsp(t *testing.T) {
 	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
 	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
 	checkController()
-	fmt.Println("CSI_QUALIFICATION_COMPLETE")
+	if candidate != nil {
+		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")
+	} else {
+		fmt.Println("CSI_QUALIFICATION_COMPLETE")
+	}
 }
 
 // Both entry points use the same byte, remount, reboot and sandbox-teardown
