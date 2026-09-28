@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"sync"
 	"testing"
@@ -29,7 +30,7 @@ var smokeSource = flag.String("mount-smoke-source", "/mnt/qualification/mount-sm
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
 const linuxImage = "docker.io/appmana/seaweedfs-csi-lab:linux-8e96856c1-b6bb02a"
-const windowsImage = "docker.io/appmana/seaweedfs-csi-lab:windows-8e96856c1-b6bb02a"
+const windowsImage = "docker.io/appmana/seaweedfs-csi-lab:windows-8e96856c1-b6bb02a-native59ce0721f"
 
 // The multi-platform tag also contains Server 2019. Offline media must select
 // the Server 2022 manifest explicitly, not the first windows/amd64 descriptor.
@@ -117,6 +118,7 @@ func nodePod(platform string, mount bool) core.Pod {
 		if mount {
 			p.Spec.Containers[0].Env = append(p.Spec.Containers[0].Env, core.EnvVar{Name: "WEED_WINFSP_VOLUME_PREFIX", Value: `\seaweedfs`})
 			p.Spec.InitContainers = []core.Container{container("install-stock", image, ps(`if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" C:\Windows\Temp\winfsp.msi; $p=Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000'; if($p.ExitCode -ne 0){throw "MSI exit $($p.ExitCode)"} }; New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`))}
+			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", image, ps(`Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs; $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing stock WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`)))
 		} else {
 			p.Spec.InitContainers = []core.Container{container("directories", image, ps(`New-Item -ItemType Directory -Force '`+root+`\plugins\`+driver+`' | Out-Null`))}
 			p.Spec.Containers = append(p.Spec.Containers, container("registrar", windowsRegistrar, []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
@@ -185,7 +187,10 @@ func objects() []any {
 	return o
 }
 func kubectl(input []byte, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	return kubectlWithTimeout(12*time.Minute, input, args...)
+}
+func kubectlWithTimeout(timeout time.Duration, input []byte, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/local/bin/k0s", append([]string{"kubectl"}, args...)...)
 	cmd.Stdin = bytes.NewReader(input)
@@ -220,6 +225,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 	if _, err := os.Stat("/mnt/qualification"); err != nil {
 		t.Fatal("offline fixture media missing", err)
 	}
+	assertFixture(t)
 	run := func(args ...string) []byte {
 		t.Helper()
 		out, err := kubectl(nil, args...)
@@ -228,30 +234,6 @@ func TestCSIStockWinFsp(t *testing.T) {
 			t.Fatalf("%v: %v", args, err)
 		}
 		return out
-	}
-	var nodes core.NodeList
-	if err := json.Unmarshal(run("get", "nodes", "-o", "json"), &nodes); err != nil {
-		t.Fatal(err)
-	}
-	if len(nodes.Items) != 2 {
-		t.Fatal("refusing non-fixture cluster")
-	}
-	for _, n := range nodes.Items {
-		want := "192.0.2.10"
-		if n.Name == "windows" {
-			want = "192.0.2.20"
-		} else if n.Name != "linux" {
-			t.Fatal("unexpected node", n.Name)
-		}
-		found := false
-		for _, a := range n.Status.Addresses {
-			if a.Type == core.NodeInternalIP && a.Address == want {
-				found = true
-			}
-		}
-		if !found {
-			t.Fatal("unexpected node address", n.Name)
-		}
 	}
 	defer func() {
 		for _, args := range [][]string{{"get", "pods,pvc", "-n", ns, "-o", "wide"}, {"get", "events", "-n", ns, "--sort-by=.metadata.creationTimestamp"}, {"describe", "pods", "-n", ns}} {
@@ -324,6 +306,10 @@ func TestCSIStockWinFsp(t *testing.T) {
 			t.Fatalf("missing LFS evidence: %s", marker)
 		}
 	}
+	nativeRoot := testWindowsRoot + `\native`
+	nativeFilerRoot := path.Join(csiFilerRoot(t), "qualification-"+token, "native")
+	runCSINative(t, nativeRoot, nativeFilerRoot, "")
+	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
 	runPhase := func(phase string) {
 		var wg sync.WaitGroup
 		for _, platform := range []string{"linux", "windows"} {
@@ -358,6 +344,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 	}
 	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=10m")
 	runPhase("verify-remount")
+	runCSINative(t, nativeRoot, nativeFilerRoot, "verify")
 	// A clean guest reboot is distinct from power loss. Require a new kernel
 	// boot ID, then ordinary-pod readiness and the full byte oracle again.
 	before := strings.TrimSpace(string(run("get", "node", "windows", "-o", "jsonpath={.status.nodeInfo.bootID}")))
@@ -387,5 +374,6 @@ func TestCSIStockWinFsp(t *testing.T) {
 	}
 	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=5m")
 	runPhase("verify-remount")
+	runCSINative(t, nativeRoot, nativeFilerRoot, "verify")
 	fmt.Println("CSI_QUALIFICATION_COMPLETE")
 }
