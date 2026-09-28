@@ -29,6 +29,10 @@ const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
 const linuxImage = "docker.io/appmana/seaweedfs-csi-lab:linux-e2aedefb0"
 const windowsImage = "docker.io/appmana/seaweedfs-csi-lab:windows-e2aedefb0"
+
+// The multi-platform tag also contains Server 2019. Offline media must select
+// the Server 2022 manifest explicitly, not the first windows/amd64 descriptor.
+const windowsRegistrar = "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.16.0@sha256:22a61d2c07212b93abad5600c6deaaa1b6c4264920ee14a4a451630979137fbb"
 const servercore = "mcr.microsoft.com/windows/servercore@sha256:e10503b9a4f7faafa30aa0f5d0e8e7f7ca30a4496b3b87d61178b4d7c6815fb5"
 const linuxRoot = "/var/lib/k0s/kubelet"
 const windowsRoot = `C:\var\lib\k0s\kubelet`
@@ -108,7 +112,7 @@ func nodePod(platform string, mount bool) core.Pod {
 			p.Spec.InitContainers = []core.Container{container("install-stock", image, ps(`if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" C:\Windows\Temp\winfsp.msi; $p=Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000'; if($p.ExitCode -ne 0){throw "MSI exit $($p.ExitCode)"} }; New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`))}
 		} else {
 			p.Spec.InitContainers = []core.Container{container("directories", image, ps(`New-Item -ItemType Directory -Force '`+root+`\plugins\`+driver+`' | Out-Null`))}
-			p.Spec.Containers = append(p.Spec.Containers, container("registrar", "registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.16.0", []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
+			p.Spec.Containers = append(p.Spec.Containers, container("registrar", windowsRegistrar, []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
 		}
 	}
 	return p
