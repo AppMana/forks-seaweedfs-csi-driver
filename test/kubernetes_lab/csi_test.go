@@ -28,8 +28,8 @@ var smokeSource = flag.String("mount-smoke-source", "/mnt/qualification/mount-sm
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
-const linuxImage = "docker.io/appmana/seaweedfs-csi-lab:linux-e2aedefb0"
-const windowsImage = "docker.io/appmana/seaweedfs-csi-lab:windows-e2aedefb0"
+const linuxImage = "docker.io/appmana/seaweedfs-csi-lab:linux-8e96856c1"
+const windowsImage = "docker.io/appmana/seaweedfs-csi-lab:windows-8e96856c1"
 
 // The multi-platform tag also contains Server 2019. Offline media must select
 // the Server 2022 manifest explicitly, not the first windows/amd64 descriptor.
