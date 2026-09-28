@@ -5,6 +5,7 @@ set -euo pipefail
 # All paths and offline input hashes are explicit so CI cannot silently skip.
 : "${CALICO_LAB_MODULE:?path to Calico hack/appmana/lab with the native workload hook}"
 : "${CSI_LAB_ARTIFACTS:?persistent output directory for this run}"
+: "${LABCONTAINERS_STATE_DIR:?absolute persistent daemon state directory for this fresh lab}"
 : "${LABCONTAINERS_CALICO_MEDIA:?offline LCQUAL ISO including CSI images and mount-smoke.ps1}"
 : "${LABCONTAINERS_CALICO_MEDIA_SHA256:?SHA256 of the offline ISO}"
 : "${LABCONTAINERS_VM_IMAGE:?Linux image with matching guest helper}"

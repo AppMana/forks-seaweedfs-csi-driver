@@ -87,6 +87,7 @@ esac`,
 	cmd := exec.Command("bash", "run.sh")
 	cmd.Env = append(os.Environ(), "PATH="+bin+":"+os.Getenv("PATH"), "PIN_TEST_REPO="+repo,
 		"PIN_TEST_LAUNCHED="+marker, "CALICO_LAB_MODULE="+dir, "CSI_LAB_ARTIFACTS="+filepath.Join(dir, "artifacts"),
+		"LABCONTAINERS_STATE_DIR="+filepath.Join(dir, "state"),
 		"LABCONTAINERS_CALICO_MEDIA="+filepath.Join(dir, "media.iso"), "LABCONTAINERS_CALICO_MEDIA_SHA256=fixture",
 		"LABCONTAINERS_VM_IMAGE=linux:fixture", "LABCONTAINERS_WINDOWS_IMAGE=windows:fixture", "LABCONTAINERS_LABD="+filepath.Join(bin, "go"))
 	out, runErr := cmd.CombinedOutput()
