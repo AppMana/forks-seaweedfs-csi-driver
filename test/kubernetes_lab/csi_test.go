@@ -336,6 +336,14 @@ func TestCSIStockWinFsp(t *testing.T) {
 	nativeFilerRoot := path.Join(csiFilerRoot(t), "qualification-"+token, "native")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
+	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
+	fmt.Println("CSI_QUALIFICATION_COMPLETE")
+}
+
+// Both entry points use the same byte, remount, reboot and sandbox-teardown
+// oracles. A targeted recovery pass is not full native-suite qualification.
+func runCSIMixedRecovery(t *testing.T, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token string, run func(...string) []byte, apply func(any)) {
+	t.Helper()
 	runPhase := func(phase string) {
 		var wg sync.WaitGroup
 		for _, platform := range []string{"linux", "windows"} {
@@ -419,5 +427,4 @@ Write-Output 'CSI_SANDBOX_TEARDOWN_COMPLETE'`
 	run("wait", "-n", ns, "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=5m")
 	captureWindowsNetwork(t)
 	runPhase("verify-remount")
-	fmt.Println("CSI_QUALIFICATION_COMPLETE")
 }
