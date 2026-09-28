@@ -280,6 +280,9 @@ func TestCSIStockWinFsp(t *testing.T) {
 		}
 	}
 	for _, platform := range []string{"linux", "windows"} {
+		// A retained-cluster rerun may change an immutable container command.
+		// Recreate only the lab's workload pods, preserving the PVC and data.
+		run("delete", "pod", "-n", ns, "client-"+platform, "--ignore-not-found=true", "--wait=true")
 		apply(clientPod(platform))
 	}
 	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=10m")
