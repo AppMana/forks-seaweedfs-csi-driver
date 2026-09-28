@@ -10,9 +10,10 @@ import (
 
 func gitTrustScript(root string) string {
 	// Process-scoped protected configuration reaches Git and its LFS children.
-	// Reset any inherited trust list, then allow exactly the disposable repo.
+	// Allow exactly the disposable repo. Windows PowerShell removes empty
+	// environment values, so do not encode a reset as an empty VALUE entry.
 	repo := strings.ReplaceAll(root, `\`, "/") + "/git-lfs-temp-metadata"
-	return `$env:GIT_CONFIG_COUNT='2'; $env:GIT_CONFIG_KEY_0='safe.directory'; $env:GIT_CONFIG_VALUE_0=''; $env:GIT_CONFIG_KEY_1='safe.directory'; $env:GIT_CONFIG_VALUE_1='` + strings.ReplaceAll(repo, "'", "''") + `'`
+	return `$env:GIT_CONFIG_COUNT='1'; $env:GIT_CONFIG_KEY_0='safe.directory'; $env:GIT_CONFIG_VALUE_0='` + strings.ReplaceAll(repo, "'", "''") + `'`
 }
 
 // Exercise Git's real ownership check locally, not a mocked success response.
@@ -44,7 +45,10 @@ func TestGitTrustIsRepositoryScoped(t *testing.T) {
 		t.Fatalf("ownership reproduction not active: %v %s", err, out)
 	}
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
-	script := gitTrustScript(root) + "; & git -C " + quote(repo) + " rev-parse --git-dir; if($LASTEXITCODE -ne 0){throw 'intended repository rejected'}; & git -C " + quote(other) + " rev-parse --git-dir; if($LASTEXITCODE -eq 0){throw 'unrelated repository trusted'}; exit 0"
+	// Model Windows PowerShell 5.1: assigning an empty environment value
+	// removes it, unlike newer PowerShell versions available on Linux CI.
+	removeEmpty := `; Get-ChildItem Env:GIT_CONFIG_VALUE_* | Where-Object {$_.Value -eq ''} | Remove-Item`
+	script := gitTrustScript(root) + removeEmpty + "; & git -C " + quote(repo) + " rev-parse --git-dir; if($LASTEXITCODE -ne 0){throw 'intended repository rejected'}; & git -C " + quote(other) + " rev-parse --git-dir; if($LASTEXITCODE -eq 0){throw 'unrelated repository trusted'}; exit 0"
 	args := ps(script)
 	cmd := exec.Command(pwsh, args[1:]...)
 	cmd.Env = env
