@@ -100,6 +100,9 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 
 	// The volume has been staged and is in memory cache.
 	if _, ok := ns.volumes.Load(volumeID); ok {
+		if err := ns.requireHealthyStaging(volumeID, stagingTargetPath); err != nil {
+			return nil, err
+		}
 		glog.Infof("volume %s has been already staged", volumeID)
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
@@ -181,6 +184,11 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 	defer volumeMutex.Unlock()
 
 	volume, ok := ns.volumes.Load(volumeID)
+	if ok {
+		if err := ns.requireHealthyStaging(volumeID, stagingTargetPath); err != nil {
+			return nil, err
+		}
+	}
 	if !ok {
 		// Phase 1: Self-healing for missing volume cache
 		// This handles the case where the CSI driver restarted and lost its in-memory state,
@@ -232,6 +240,18 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 
 	glog.Infof("volume %s successfully published to %s", volumeID, targetPath)
 	return &csi.NodePublishVolumeResponse{}, nil
+}
+
+// A cache hit can come from vol_data.json after a reboot, even when recovery
+// already observed the staging mount dead. Tracking is not readiness. Keep
+// kubelet retrying instead of acknowledging Stage or binding an unreadable
+// source; the health monitor owns safe teardown/recovery. A slow probe is not
+// evidence of death and must never trigger teardown from this RPC.
+func (ns *NodeServer) requireHealthyStaging(volumeID, stagingPath string) error {
+	if result := ns.checkHealth(stagingPath); result != healthOK {
+		return status.Errorf(codes.Unavailable, "volume %s staging path %s is not ready (%s); retry after recovery", volumeID, stagingPath, result)
+	}
+	return nil
 }
 
 // rebuildVolumeFromStaging creates a Volume struct from an existing healthy staging mount.
