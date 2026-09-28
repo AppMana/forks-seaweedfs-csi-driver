@@ -18,7 +18,8 @@ func TestCandidatePreparationScriptIsFailClosedAndNonDestructive(t *testing.T) {
 		"driver_source_revision", "driver_source_archive_sha256", "certificate_thumbprint",
 		"source.zip", "driver-source.zip",
 		"Get-AuthenticodeSignature", "AppMana WinFsp LAB ONLY", "Assert-CandidateManifest",
-		"clean stock WinFsp InstallDir", "existing stock WinFsp DLL is not validly signed",
+		"clean stock InstallDir", "existing stock WinFsp DLL is not validly signed",
+		"WinFsp service exists without its stock installation registry state", "stock WinFsp bootstrap did not complete",
 		"C:\\WinFspCandidates", "winfsp-csi-candidate.test.exe",
 		"CSI_CANDIDATE_PREPARED_REBOOT_REQUIRED",
 	} {
@@ -33,6 +34,31 @@ func TestCandidatePreparationScriptIsFailClosedAndNonDestructive(t *testing.T) {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("candidate preparation contains unsafe operation %q", forbidden)
 		}
+	}
+}
+
+func TestCandidatePreparationStockBootstrapBehavior(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required")
+	}
+	for _, tc := range []struct {
+		name, args, expected string
+		want                 bool
+	}{
+		{"fresh absent", "$false '' ''", "absent", true},
+		{"clean signed stock", "$true 'C:\\Program Files (x86)\\WinFsp\\' 'Valid'", "present", true},
+		{"partial missing path", "$true '' ''", "", false},
+		{"candidate already selected", "$true 'C:\\WinFspCandidates\\abc\\' 'Valid'", "", false},
+		{"unsigned stock", "$true 'C:\\Program Files (x86)\\WinFsp\\' 'NotSigned'", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `$text=Get-Content -LiteralPath 'prepare-candidate-winfsp.ps1' -Raw;$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){throw 'parse failed'};$f=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-CleanStockInstall'},$true));if($f.Count -ne 1){throw 'function missing'};Invoke-Expression $f[0].Extent.Text;$state=Assert-CleanStockInstall ` + tc.args + `;if($state -cne '` + tc.expected + `'){throw "unexpected state: $state"}`
+			out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+			if (err == nil) != tc.want {
+				t.Fatalf("accepted=%v error=%v output=%s", err == nil, err, out)
+			}
+		})
 	}
 }
 

@@ -39,6 +39,15 @@ function Assert-CandidateBootPolicy($BootLines) {
     if (!$testSigning) { throw 'testsigning was not enabled by the lab installer' }
 }
 
+function Assert-CleanStockInstall([bool]$RegistryExists, [string]$InstallDir, [string]$SignatureStatus) {
+    if (!$RegistryExists) { return 'absent' }
+    if (!$InstallDir -or $InstallDir.StartsWith('C:\WinFspCandidates\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'existing WinFsp registry state is not a clean stock InstallDir'
+    }
+    if ($SignatureStatus -ne 'Valid') { throw 'existing stock WinFsp DLL is not validly signed' }
+    return 'present'
+}
+
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18') {
     throw 'candidate preparation requires the isolated Windows lab SYSTEM token'
 }
@@ -88,20 +97,36 @@ if (!$driverSignature.SignerCertificate -or $driverSignature.SignerCertificate.T
 
 $registryPath = 'HKLM:\SOFTWARE\WOW6432Node\WinFsp'
 $previousInstallDir = $null
-if (Test-Path $registryPath) {
+$registryExists = Test-Path $registryPath
+$stockSignatureStatus = $null
+if ($registryExists) {
     $previousInstallDir = (Get-ItemProperty -LiteralPath $registryPath -Name InstallDir -ErrorAction SilentlyContinue).InstallDir
+    if ($previousInstallDir) {
+        $stockSignatureStatus = (Get-AuthenticodeSignature -LiteralPath (Join-Path $previousInstallDir 'bin\winfsp-x64.dll')).Status
+    }
 }
-if (!$previousInstallDir -or $previousInstallDir.StartsWith('C:\WinFspCandidates\', [StringComparison]::OrdinalIgnoreCase)) {
-    throw 'candidate preparation requires a clean stock WinFsp InstallDir'
+$stockState = Assert-CleanStockInstall $registryExists $previousInstallDir $stockSignatureStatus
+if ($stockState -eq 'absent') {
+    $staleServices = @(Get-CimInstance Win32_SystemDriver | Where-Object { $_.Name -like 'WinFsp*' })
+    if ($staleServices.Count) { throw 'WinFsp service exists without its stock installation registry state' }
 }
-$stockDll = Join-Path $previousInstallDir 'bin\winfsp-x64.dll'
-$stockSignature = Get-AuthenticodeSignature -LiteralPath $stockDll
-if ($stockSignature.Status -ne 'Valid') { throw "existing stock WinFsp DLL is not validly signed: $stockDll" }
 
 # Reuse the fork's installer for certificate trust, test-signing policy, stock
-# tools and driver registration. Its exact bytes were checked above.
+# tools and driver registration. On a fresh VM this installs the exact
+# hash-pinned stock MSI first; on an existing clean stock VM it repairs that
+# same MSI. Its exact bytes were checked above.
 & $installer -Token $Token
 if ($LASTEXITCODE -ne 0) { throw "candidate installer failed: $LASTEXITCODE" }
+
+# The stock MSI owns this directory and is the rollback anchor. Require it
+# after either fresh install or repair before selecting the isolated DLL.
+$installedStockRoot = (Get-ItemProperty -LiteralPath $registryPath -Name InstallDir -ErrorAction Stop).InstallDir
+$installedStockDLL = Join-Path $installedStockRoot 'bin\winfsp-x64.dll'
+$installedStockSignature = Get-AuthenticodeSignature -LiteralPath $installedStockDLL
+if ((Assert-CleanStockInstall $true $installedStockRoot $installedStockSignature.Status) -ne 'present') {
+    throw 'stock WinFsp bootstrap did not complete'
+}
+if (!$previousInstallDir) { $previousInstallDir = $installedStockRoot }
 
 # Do not replace the MSI-owned DLL. Select an isolated InstallDir that satisfies
 # WinFsp/cgofuse's documented <InstallDir>\bin\winfsp-x64.dll lookup.
