@@ -1,0 +1,6 @@
+# Runtime-equivalent lab bundle; binaries are built from exact local commits.
+FROM alpine:3.20
+RUN apk add --no-cache fuse git git-lfs
+COPY weed /usr/bin/weed
+COPY seaweedfs-csi-driver seaweedfs-mount mixed-linux /usr/local/bin/
+ENTRYPOINT ["/usr/local/bin/seaweedfs-csi-driver"]

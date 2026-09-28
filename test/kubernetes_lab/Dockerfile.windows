@@ -1,0 +1,6 @@
+# Same HostProcess base and executable locations as the production packages.
+FROM mcr.microsoft.com/oss/kubernetes/windows-host-process-containers-base-image:v1.0.0
+COPY weed.exe seaweedfs-csi-driver.exe seaweedfs-mount.exe winfsp.msi mixed-windows.exe Git-2.51.0-64-bit.exe /
+ENV PATH="C:\Windows\system32;C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;"
+USER ContainerAdministrator
+ENTRYPOINT ["/seaweedfs-csi-driver.exe"]
