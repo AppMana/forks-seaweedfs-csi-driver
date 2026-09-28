@@ -84,6 +84,21 @@ func TestQualificationAttestsBeforeAndAfterRecovery(t *testing.T) {
 	}
 }
 
+func TestRetainedRecoveryAttestsBeforeAndAfterRecovery(t *testing.T) {
+	b, err := os.ReadFile("retained_recovery_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	pre := strings.Index(text, `attestStock("pre-recovery")`)
+	recovery := strings.Index(text, "runCSIMixedRecovery(t,")
+	post := strings.Index(text, `attestStock("post-recovery")`)
+	complete := strings.Index(text, `fmt.Println("CSI_RETAINED_MIXED_RECOVERY_COMPLETE")`)
+	if pre < 0 || recovery <= pre || post <= recovery || complete <= post || strings.Contains(text, `strings.Contains(string(stock)`) {
+		t.Fatalf("retained attestation/recovery/completion order is not fail-closed: pre=%d recovery=%d post=%d complete=%d", pre, recovery, post, complete)
+	}
+}
+
 func TestCandidateNativeInputIsExplicitAndReadOnly(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	if got, err := candidateNativeInput(`C:\tools\winfsp-csi-candidate.test.exe`, hash); err != nil || got != `C:\LabInputs\winfsp-csi-candidate.test.exe` {
