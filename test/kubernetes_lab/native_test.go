@@ -61,7 +61,7 @@ foreach($name in @('Assert','Invoke-NativeMountedSuite')) {
  if($functions.Count -ne 1){throw "expected exactly one function $name"};
  Invoke-Expression $functions[0].Extent.Text
 };
-$WinFspTestExe='C:\tools\winfsp-csi.test.exe';
+$WinFspTestExe=` + psLiteral(*nativeTestExecutable) + `;
 $ExpectedWinFspDll='C:\tools\winfsp-x64.dll';
 $BasicPermissions=$false; $script:failures=0;
 $logDir=Join-Path $env:TEMP ('csi-native-'+[Guid]::NewGuid().ToString('N'));
@@ -96,24 +96,29 @@ func TestNativeSuiteTransport(t *testing.T) {
 	if err != nil {
 		t.Skip("PowerShell required for the real script transport contract")
 	}
-	for _, fail := range []bool{false, true} {
-		t.Run(fmt.Sprint(fail), func(t *testing.T) {
-			source := `throw 'standalone bootstrap must never execute'
+	previous := *nativeTestExecutable
+	t.Cleanup(func() { *nativeTestExecutable = previous })
+	for _, executable := range []string{previous, `C:\tools\pinned'input.test.exe`} {
+		*nativeTestExecutable = executable
+		for _, fail := range []bool{false, true} {
+			t.Run(fmt.Sprint(fail), func(t *testing.T) {
+				source := `throw 'standalone bootstrap must never execute'
 function Assert([bool]$cond, [string]$what) { if(!$cond){$script:failures++} }
 function Invoke-NativeMountedSuite([string]$mnt, [string]$Phase, [string]$FilerEndpoint, [string]$FilerRootPrefix, [uint32]$LegacyPermissionUID, [uint32]$LegacyPermissionGID, [uint32]$LegacyPermissionMode) {
  if($mnt -ne "C:\data\quote'root" -or $Phase -ne 'write' -or $FilerEndpoint -ne '192.0.2.10:8888' -or $FilerRootPrefix -ne "/buckets/pvc/quote'root"){throw 'lost scoped arguments'}
- if($BasicPermissions -or $WinFspTestExe -ne 'C:\tools\winfsp-csi.test.exe' -or $ExpectedWinFspDll -ne 'C:\tools\winfsp-x64.dll' -or $LegacyPermissionUID -ne 0 -or $LegacyPermissionGID -ne 0 -or $LegacyPermissionMode -ne 504){throw 'wrong CSI policy, identity or tooling'}
+ if($BasicPermissions -or $WinFspTestExe -ne ` + psLiteral(executable) + ` -or $ExpectedWinFspDll -ne 'C:\tools\winfsp-x64.dll' -or $LegacyPermissionUID -ne 0 -or $LegacyPermissionGID -ne 0 -or $LegacyPermissionMode -ne 504){throw 'wrong CSI policy, identity or tooling'}
  Assert $` + fmt.Sprint(!fail) + ` 'simulated native outcome'
 }`
-			args := ps(nativeSuiteScript(`C:\data\quote'root`, "/buckets/pvc/quote'root", "write", csiLegacyPermissionUID, csiLegacyPermissionGID, csiLegacyPermissionMode))
-			cmd := exec.Command(pwsh, args[1:]...)
-			cmd.Env = append(os.Environ(), "TEMP="+t.TempDir())
-			cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(source)))
-			out, err := cmd.CombinedOutput()
-			if (err != nil) != fail || nativeComplete(string(out), "write") == fail {
-				t.Fatalf("failure=%v: %v\n%s", fail, err, out)
-			}
-		})
+				args := ps(nativeSuiteScript(`C:\data\quote'root`, "/buckets/pvc/quote'root", "write", csiLegacyPermissionUID, csiLegacyPermissionGID, csiLegacyPermissionMode))
+				cmd := exec.Command(pwsh, args[1:]...)
+				cmd.Env = append(os.Environ(), "TEMP="+t.TempDir())
+				cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(source)))
+				out, err := cmd.CombinedOutput()
+				if (err != nil) != fail || nativeComplete(string(out), "write") == fail {
+					t.Fatalf("failure=%v: %v\n%s", fail, err, out)
+				}
+			})
+		}
 	}
 }
 

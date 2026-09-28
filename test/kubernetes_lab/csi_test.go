@@ -27,6 +27,7 @@ import (
 var live = flag.Bool("csi-live", false, "run only inside the disposable Labcontainers k0s controller")
 var smokeSource = flag.String("mount-smoke-source", "/mnt/qualification/mount-smoke.ps1", "existing SeaweedFS Git LFS regression source on hash-pinned offline media")
 var clientRun = flag.String("csi-client-run", "", "explicit client name suffix for independent A/B runs; never repairs or replaces a failed run")
+var nativeTestExecutable = flag.String("csi-native-test-executable", `C:\tools\winfsp-csi.test.exe`, "explicit native test input in the CSI client's read-only tools share")
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
