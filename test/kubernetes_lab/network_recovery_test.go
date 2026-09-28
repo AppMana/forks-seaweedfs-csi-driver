@@ -2,6 +2,7 @@ package kubernetes_lab
 
 import (
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 
@@ -27,7 +28,17 @@ func captureWindowsNetwork(t *testing.T) windowsNetworkSnapshot {
 	if id == "" {
 		t.Fatal("workload has no Calico sandbox identity")
 	}
-	script := `$sandbox=` + psLiteral(id) + `;
+	out, err = kubectl(nil, append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(windowsNetworkSnapshotScript(id))...)...)
+	t.Logf("Windows sandbox network evidence: %s", out)
+	var snapshot windowsNetworkSnapshot
+	if err != nil || json.Unmarshal(out, &snapshot) != nil || snapshot.NetworkID == "" || snapshot.EndpointID == "" || snapshot.NamespaceID == "" {
+		t.Fatalf("invalid or unhealthy sandbox network: %v %s", err, out)
+	}
+	return snapshot
+}
+
+func windowsNetworkSnapshotScript(id string) string {
+	return `$sandbox=` + psLiteral(id) + `;
 $networks=@(Get-HnsNetwork | Where-Object {$_.Name -eq 'Calico' -and $_.Type -eq 'Overlay'});
 if($networks.Count -ne 1){throw 'expected one Calico Overlay network'};
 $endpoints=@(Get-HnsEndpoint | Where-Object {$_.Name -eq ($sandbox+'_Calico')});
@@ -38,13 +49,50 @@ if($namespaces.Count -ne 1 -or $namespaces[0].IsDefault){throw 'current sandbox 
 $refs=@($namespaces[0].ResourceList | Where-Object {$_.Type -eq 'Endpoint'});
 if($refs.Count -ne 1 -or $refs[0].Data.Id -ne $endpoints[0].ID){throw 'sandbox namespace contains a dangling or unexpected endpoint'};
 [pscustomobject]@{NetworkID=$networks[0].ID;EndpointID=$endpoints[0].ID;NamespaceID=$namespaces[0].ID} | ConvertTo-Json -Compress`
-	out, err = kubectl(nil, append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(script)...)...)
-	t.Logf("Windows sandbox network evidence: %s", out)
-	var snapshot windowsNetworkSnapshot
-	if err != nil || json.Unmarshal(out, &snapshot) != nil || snapshot.NetworkID == "" || snapshot.EndpointID == "" || snapshot.NamespaceID == "" {
-		t.Fatalf("invalid or unhealthy sandbox network: %v %s", err, out)
+}
+
+// Execute the production observation script against modeled HNS responses.
+// These contracts do not substitute for the real reboot gate: they ensure the
+// gate cannot accept the dangling namespace observed in the retained lab.
+func TestWindowsNetworkSnapshotRejectsDanglingState(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required for HNS observation script contracts")
 	}
-	return snapshot
+	fixture := `$ErrorActionPreference='Stop';
+$network=[pscustomobject]@{Name='Calico';Type='Overlay';ID='network'};
+$endpoint=[pscustomobject]@{Name='sandbox_Calico';ID='endpoint';VirtualNetwork='network'};
+$namespace=[pscustomobject]@{ID='namespace';IsDefault=$false;Containers=@('sandbox');ResourceList=@([pscustomobject]@{Type='Endpoint';Data=[pscustomobject]@{Id='endpoint'}})};
+function Get-HnsNetwork { $network }
+function Get-HnsEndpoint { $endpoint }
+function Get-HnsNamespace { $namespace }
+`
+	for _, tc := range []struct {
+		name, mutate, want string
+	}{
+		{"healthy", "", ""},
+		{"missing_endpoint", "$endpoint=$null;", "current sandbox endpoint is missing"},
+		{"wrong_network", "$endpoint.VirtualNetwork='deleted-network';", "belongs to wrong network"},
+		{"dangling_reference", "$namespace.ResourceList[0].Data.Id='deleted-endpoint';", "dangling or unexpected endpoint"},
+		{"extra_reference", "$namespace.ResourceList+= $namespace.ResourceList[0];", "dangling or unexpected endpoint"},
+		{"default_namespace", "$namespace.IsDefault=$true;", "missing, ambiguous or default"},
+		{"wrong_sandbox", "$namespace.Containers=@('old-sandbox');", "missing, ambiguous or default"},
+		{"missing_network", "$network=$null;", "expected one Calico Overlay network"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", fixture+tc.mutate+windowsNetworkSnapshotScript("sandbox")).CombinedOutput()
+			if tc.want != "" {
+				if err == nil || !strings.Contains(string(out), tc.want) {
+					t.Fatalf("wanted rejection %q: err=%v output=%s", tc.want, err, out)
+				}
+				return
+			}
+			var got windowsNetworkSnapshot
+			if err != nil || json.Unmarshal(out, &got) != nil || got != (windowsNetworkSnapshot{"network", "endpoint", "namespace"}) {
+				t.Fatalf("healthy observation: err=%v snapshot=%+v output=%s", err, got, out)
+			}
+		})
+	}
 }
 
 func assertNetworkPreserved(t *testing.T, before, after windowsNetworkSnapshot) {
