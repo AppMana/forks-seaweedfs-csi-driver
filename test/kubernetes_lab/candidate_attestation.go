@@ -9,6 +9,24 @@ import (
 	"strings"
 )
 
+func candidateNativeInput(executable, expectedSHA256 string) (string, error) {
+	const prefix = `C:\tools\`
+	if !strings.HasPrefix(strings.ToLower(executable), strings.ToLower(prefix)) {
+		return "", fmt.Errorf("candidate native executable must be in the read-only C:\\tools mount")
+	}
+	name := executable[len(prefix):]
+	if name == "" || strings.ContainsAny(name, `\/:`) {
+		return "", fmt.Errorf("candidate native executable must be a direct C:\\tools child")
+	}
+	if len(expectedSHA256) != 64 {
+		return "", fmt.Errorf("candidate native executable SHA-256 is required")
+	}
+	if _, err := hex.DecodeString(expectedSHA256); err != nil {
+		return "", fmt.Errorf("invalid candidate native executable SHA-256")
+	}
+	return `C:\LabInputs\` + name, nil
+}
+
 type candidateManifest struct {
 	CertificateThumbprint     string `json:"certificate_thumbprint"`
 	DriverSourceRevision      string `json:"driver_source_revision"`
@@ -16,6 +34,15 @@ type candidateManifest struct {
 	DLLSHA256                 string `json:"dll_sha256"`
 	DriverSHA256              string `json:"driver_sha256"`
 	LabOnly                   bool   `json:"lab_only"`
+}
+
+func containsExactLine(output, marker string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.TrimSpace(line) == marker {
+			return true
+		}
+	}
+	return false
 }
 
 func loadCandidateManifest(path, expectedSHA256 string) (candidateManifest, error) {
@@ -79,7 +106,7 @@ function Assert-CandidateEvidence($boot,$dlls,$drivers,$expectedDllHash,$expecte
  if($driver.Thumbprint -ine $expectedThumbprint){throw "candidate driver signer mismatch: $($driver.Path)"}
 }`
 
-func candidateAttestation(manifest candidateManifest) string {
+func candidateAttestation(manifest candidateManifest, nativePath, nativeSHA256 string) string {
 	return candidateAttestationFunctions + `
 $boot=& bcdedit /enum '{current}'
 if($LASTEXITCODE -ne 0){throw 'cannot attest boot policy'}
@@ -92,8 +119,11 @@ $drivers=@(Get-CimInstance Win32_SystemDriver | Where-Object {$_.Name -like 'Win
  [pscustomobject]@{Path=$path;Hash=(Get-FileHash -Algorithm SHA256 $path).Hash;Thumbprint=$sig.SignerCertificate.Thumbprint}
 })
 Assert-CandidateEvidence $boot $dlls $drivers ` + psLiteral(manifest.DLLSHA256) + ` ` + psLiteral(manifest.DriverSHA256) + ` ` + psLiteral(manifest.CertificateThumbprint) + `
+$nativeHash=(Get-FileHash -Algorithm SHA256 ` + psLiteral(nativePath) + `).Hash
+if($nativeHash -ine ` + psLiteral(nativeSHA256) + `){throw 'candidate native test executable hash mismatch'}
 $dlls | Format-List
 $drivers | Format-List
+Write-Output "CANDIDATE_NATIVE_TEST_SHA256:$nativeHash"
 Write-Output ` + psLiteral("CANDIDATE_WINFSP_ATTESTED:"+manifest.DriverSourceRevision+":"+manifest.DriverSourceArchiveSHA256) + `
 `
 }

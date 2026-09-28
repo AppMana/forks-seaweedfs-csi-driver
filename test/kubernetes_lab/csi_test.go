@@ -30,6 +30,7 @@ var clientRun = flag.String("csi-client-run", "", "explicit client name suffix f
 var nativeTestExecutable = flag.String("csi-native-test-executable", `C:\tools\winfsp-csi.test.exe`, "explicit native test input in the CSI client's read-only tools share")
 var candidateManifestPath = flag.String("csi-candidate-manifest", "", "explicit lab-only WinFsp candidate build manifest")
 var candidateManifestSHA256 = flag.String("csi-candidate-manifest-sha256", "", "immutable SHA-256 of the candidate build manifest")
+var candidateNativeTestSHA256 = flag.String("csi-candidate-native-test-sha256", "", "immutable SHA-256 of the separately staged candidate native test executable")
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
@@ -137,7 +138,17 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 			}
 			prepare += ` New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`
 			p.Spec.InitContainers = []core.Container{container(name, image, ps(prepare))}
-			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", image, ps(`Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs; $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`)))
+			nativeInputs := `Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs;`
+			if candidate {
+				nativePath, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256)
+				if err != nil {
+					nativeInputs = `throw ` + psLiteral(err.Error()) + `;`
+				} else {
+					nativeInputs = `$native=` + psLiteral(nativePath) + `; if(!(Test-Path -LiteralPath $native)){throw 'prepared candidate native test executable missing'}; if((Get-FileHash -Algorithm SHA256 -LiteralPath $native).Hash -ine ` + psLiteral(*candidateNativeTestSHA256) + `){throw 'prepared candidate native test executable hash mismatch'};`
+				}
+			}
+			nativeInputs += ` $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`
+			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", image, ps(nativeInputs)))
 		} else {
 			p.Spec.InitContainers = []core.Container{container("directories", image, ps(`New-Item -ItemType Directory -Force '`+root+`\plugins\`+driver+`' | Out-Null`))}
 			p.Spec.Containers = append(p.Spec.Containers, container("registrar", windowsRegistrar, []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
@@ -272,6 +283,9 @@ func TestCSICandidateWinFsp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256); err != nil {
+		t.Fatal(err)
+	}
 	runCSIQualification(t, &manifest)
 }
 
@@ -342,13 +356,21 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
 	attestation, marker := stockAttestation, "STOCK_WINFSP_ATTESTED"
 	if candidate != nil {
-		attestation = candidateAttestation(*candidate)
+		nativePath, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		attestation = candidateAttestation(*candidate, nativePath, *candidateNativeTestSHA256)
 		marker = "CANDIDATE_WINFSP_ATTESTED:" + candidate.DriverSourceRevision + ":" + candidate.DriverSourceArchiveSHA256
 	}
-	driverEvidence := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(attestation)...)...)
-	if !strings.Contains(string(driverEvidence), marker) {
-		t.Fatal("missing exact WinFsp driver evidence")
+	attest := func(stage string) {
+		t.Helper()
+		driverEvidence := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(attestation)...)...)
+		if !containsExactLine(string(driverEvidence), marker) {
+			t.Fatalf("missing exact WinFsp driver evidence at %s", stage)
+		}
 	}
+	attest("pre-workload")
 	// Execute the existing regression function, not its standalone mount bootstrap.
 	// Parsing the AST selects exactly the two named functions without dot-sourcing
 	// the script (which would create a second mount and bypass Kubernetes CSI).
@@ -375,6 +397,7 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	runCSINative(t, nativeRoot, nativeFilerRoot, "")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
 	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
+	attest("post-recovery")
 	checkController()
 	if candidate != nil {
 		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")

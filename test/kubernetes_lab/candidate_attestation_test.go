@@ -52,6 +52,55 @@ func TestCandidateManifestRequiresImmutableLabProvenance(t *testing.T) {
 	}
 }
 
+func TestAttestationEvidenceRequiresExactLine(t *testing.T) {
+	marker := "CANDIDATE_WINFSP_ATTESTED:revision:source"
+	for _, tc := range []struct {
+		output string
+		want   bool
+	}{
+		{"prefix " + marker, false},
+		{"Write-Output '" + marker + "'", false},
+		{marker + "-suffix", false},
+		{"evidence\r\n" + marker + "\r\n", true},
+	} {
+		if got := containsExactLine(tc.output, marker); got != tc.want {
+			t.Fatalf("output %q: got %v want %v", tc.output, got, tc.want)
+		}
+	}
+}
+
+func TestQualificationAttestsBeforeAndAfterRecovery(t *testing.T) {
+	b, err := os.ReadFile("csi_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(b)
+	pre := strings.Index(text, `attest("pre-workload")`)
+	recovery := strings.Index(text, "runCSIMixedRecovery(t,")
+	post := strings.Index(text, `attest("post-recovery")`)
+	complete := strings.Index(text, `fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")`)
+	if pre < 0 || recovery <= pre || post <= recovery || complete <= post {
+		t.Fatalf("attestation/recovery/completion order is not fail-closed: pre=%d recovery=%d post=%d complete=%d", pre, recovery, post, complete)
+	}
+}
+
+func TestCandidateNativeInputIsExplicitAndReadOnly(t *testing.T) {
+	hash := strings.Repeat("a", 64)
+	if got, err := candidateNativeInput(`C:\tools\winfsp-csi-candidate.test.exe`, hash); err != nil || got != `C:\LabInputs\winfsp-csi-candidate.test.exe` {
+		t.Fatalf("valid input: %q %v", got, err)
+	}
+	for _, tc := range []struct{ path, hash string }{
+		{`C:\tools\winfsp-csi-candidate.test.exe`, ""},
+		{`C:\tools\subdir\test.exe`, hash},
+		{`C:\LabInputs\test.exe`, hash},
+		{`C:\tools\..\test.exe`, hash},
+	} {
+		if _, err := candidateNativeInput(tc.path, tc.hash); err == nil {
+			t.Fatalf("accepted unsafe native input: %+v", tc)
+		}
+	}
+}
+
 func TestCandidateEvidenceRefusesMismatch(t *testing.T) {
 	pwsh, err := exec.LookPath("pwsh")
 	if err != nil {
@@ -99,6 +148,10 @@ func decodedPowerShell(t *testing.T, command []string) string {
 }
 
 func TestCandidateInitializationCannotInstallStockWinFsp(t *testing.T) {
+	oldExe, oldSHA := *nativeTestExecutable, *candidateNativeTestSHA256
+	t.Cleanup(func() { *nativeTestExecutable, *candidateNativeTestSHA256 = oldExe, oldSHA })
+	*nativeTestExecutable = `C:\tools\winfsp-csi-candidate.test.exe`
+	*candidateNativeTestSHA256 = strings.Repeat("a", 64)
 	candidate := nodePodForQualification("windows", true, true)
 	stock := nodePodForQualification("windows", true, false)
 	if len(candidate.Spec.InitContainers) != 2 || candidate.Spec.InitContainers[0].Name != "require-candidate" {
@@ -123,8 +176,14 @@ func TestCandidateInitializationCannotInstallStockWinFsp(t *testing.T) {
 			pod = stock
 		}
 		inputs := decodedPowerShell(t, pod.Spec.InitContainers[1].Command)
-		if !strings.Contains(inputs, "winfsp-csi.test.exe") || !strings.Contains(inputs, "winfsp-x64.dll") {
+		if !strings.Contains(inputs, "winfsp-x64.dll") {
 			t.Fatalf("%s native inputs missing: %s", name, inputs)
+		}
+		if name == "candidate" && (strings.Contains(inputs, "CONTAINER_SANDBOX_MOUNT_POINT\\winfsp-csi.test.exe") || !strings.Contains(inputs, "winfsp-csi-candidate.test.exe")) {
+			t.Fatalf("candidate native input can be overwritten or is not explicit: %s", inputs)
+		}
+		if name == "stock" && !strings.Contains(inputs, "CONTAINER_SANDBOX_MOUNT_POINT\\winfsp-csi.test.exe") {
+			t.Fatalf("stock native input changed unexpectedly: %s", inputs)
 		}
 	}
 }
