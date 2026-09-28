@@ -165,6 +165,10 @@ func objects() []any {
 	backend := basePod("backend", "linux")
 	backend.Spec.HostNetwork = true
 	backend.Spec.Containers = []core.Container{container("weed", linuxImage, []string{"/usr/bin/weed"}, "server", "-ip=192.0.2.10", "-dir=/data", "-filer", "-master.volumeSizeLimitMB=64", "-volume.max=5")}
+	// Match the standalone native Windows suite's UTF-8 byte budget. Windows
+	// still enforces 255 UTF-16 units; Linux retains its 255-byte mount limit.
+	// Set this globally on the isolated filer: rename also uses that limit.
+	backend.Spec.Containers[0].Env = []core.EnvVar{{Name: "WEED_FILER_OPTIONS_MAX_FILE_NAME_LENGTH", Value: "1020"}}
 	backend.Spec.Volumes = []core.Volume{{Name: "data", VolumeSource: core.VolumeSource{EmptyDir: &core.EmptyDirVolumeSource{}}}}
 	backend.Spec.Containers[0].VolumeMounts = []core.VolumeMount{{Name: "data", MountPath: "/data"}}
 	o = append(o, backend)
