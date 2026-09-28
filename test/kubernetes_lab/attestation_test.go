@@ -2,8 +2,24 @@ package kubernetes_lab
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 )
+
+func TestPowerShellContainerTransport(t *testing.T) {
+	path, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required")
+	}
+	args := ps("function Example {\n Write-Output 'quotes \" braces {} λ'\n}; Example")
+	if args[3] != "-EncodedCommand" {
+		t.Fatal("container command must not contain raw multiline script")
+	}
+	out, err := exec.Command(path, args[1:]...).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "quotes \" braces {} λ") {
+		t.Fatalf("transport: %v %s", err, out)
+	}
+}
 
 const bootPolicy = `function Assert-DriverTrustPolicy($boot) {
  foreach($line in $boot) {

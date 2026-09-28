@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf16"
 
 	apps "k8s.io/api/apps/v1"
 	core "k8s.io/api/core/v1"
@@ -45,7 +46,13 @@ func container(name, image string, command []string, args ...string) core.Contai
 	return core.Container{Name: name, Image: image, ImagePullPolicy: core.PullNever, Command: command, Args: args}
 }
 func ps(script string) []string {
-	return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference='Stop'; " + script}
+	units := utf16.Encode([]rune("$ErrorActionPreference='Stop'; " + script))
+	encoded := make([]byte, 2*len(units))
+	for i, u := range units {
+		encoded[2*i] = byte(u)
+		encoded[2*i+1] = byte(u >> 8)
+	}
+	return []string{"powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand", base64.StdEncoding.EncodeToString(encoded)}
 }
 func basePod(name, platform string) core.Pod {
 	return core.Pod{TypeMeta: meta.TypeMeta{APIVersion: "v1", Kind: "Pod"}, ObjectMeta: metadata(name), Spec: core.PodSpec{NodeSelector: map[string]string{"kubernetes.io/os": platform}, Tolerations: []core.Toleration{{Operator: core.TolerationOpExists}}}}
