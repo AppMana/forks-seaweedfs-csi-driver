@@ -12,6 +12,7 @@ set -euo pipefail
 : "${LABCONTAINERS_LABD:?daemon matching the fixture SDK and guest helper}"
 
 csi_repo=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+bash "$csi_repo/test/kubernetes_lab/verify-media.sh" "$LABCONTAINERS_CALICO_MEDIA"
 mkdir -p "$CSI_LAB_ARTIFACTS"
 export GOWORK=off
 export LABCONTAINERS_KUBERNETES_WORKLOAD="$CSI_LAB_ARTIFACTS/kubernetes-workload"
