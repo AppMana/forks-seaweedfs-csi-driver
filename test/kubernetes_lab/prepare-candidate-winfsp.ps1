@@ -30,6 +30,15 @@ function Assert-CandidateManifest($Manifest) {
     }
 }
 
+function Assert-CandidateBootPolicy($BootLines) {
+    $testSigning = $false
+    foreach ($line in @($BootLines)) {
+        if ($line -match '^\s*testsigning\s+Yes\s*$') { $testSigning = $true }
+        if ($line -match '^\s*nointegritychecks\s+Yes\s*$') { throw 'nointegritychecks must remain disabled' }
+    }
+    if (!$testSigning) { throw 'testsigning was not enabled by the lab installer' }
+}
+
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18') {
     throw 'candidate preparation requires the isolated Windows lab SYSTEM token'
 }
@@ -120,10 +129,8 @@ if (Test-Path -LiteralPath $selectedNative) {
 Assert-Hash $selectedNative $NativeTestSHA256 'selected candidate native test executable'
 
 $boot = & bcdedit.exe /enum '{current}'
-if ($LASTEXITCODE -ne 0 -or $boot -notmatch '(?im)^\s*testsigning\s+Yes\s*$') {
-    throw 'testsigning was not enabled by the lab installer'
-}
-if ($boot -match '(?im)^\s*nointegritychecks\s+Yes\s*$') { throw 'nointegritychecks must remain disabled' }
+if ($LASTEXITCODE -ne 0) { throw 'cannot attest candidate boot policy' }
+Assert-CandidateBootPolicy $boot
 
 [ordered]@{
     token = $Token

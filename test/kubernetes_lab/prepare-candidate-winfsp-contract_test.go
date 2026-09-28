@@ -62,3 +62,27 @@ func TestCandidatePreparationManifestBehavior(t *testing.T) {
 		})
 	}
 }
+
+func TestCandidatePreparationBootPolicyBehavior(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required")
+	}
+	for _, tc := range []struct {
+		name, lines string
+		want        bool
+	}{
+		{"realistic enabled array", `@('Windows Boot Loader','-------------------','identifier {current}','path \\Windows\\system32\\winload.exe','testsigning Yes','nx OptIn')`, true},
+		{"disabled", `@('identifier {current}','testsigning No','nx OptIn')`, false},
+		{"missing", `@('identifier {current}','nx OptIn')`, false},
+		{"integrity bypass", `@('identifier {current}','testsigning Yes','nointegritychecks Yes')`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `$text=Get-Content -LiteralPath 'prepare-candidate-winfsp.ps1' -Raw;$tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);if($errors.Count){throw 'parse failed'};$f=@($ast.FindAll({param($n)$n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Assert-CandidateBootPolicy'},$true));if($f.Count -ne 1){throw 'function missing'};Invoke-Expression $f[0].Extent.Text;Assert-CandidateBootPolicy ` + tc.lines
+			out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+			if (err == nil) != tc.want {
+				t.Fatalf("accepted=%v error=%v output=%s", err == nil, err, out)
+			}
+		})
+	}
+}
