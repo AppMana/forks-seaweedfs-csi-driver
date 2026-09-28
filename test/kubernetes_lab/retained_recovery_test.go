@@ -48,7 +48,10 @@ func TestCSIRetainedMixedRecovery(t *testing.T) {
 	linuxPath, windowsPath := "/data/qualification-"+token, `C:\data\qualification-`+token
 	nativePath := windowsPath + `\native`
 	filerPath := path.Join(csiFilerRoot(t), "qualification-"+token, "native")
-	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", linuxPath+"/mixed/.sync")
+	// The full native suite normally creates this test subdirectory. A retained
+	// persistence-only run must supply it explicitly before the attributes test,
+	// which intentionally uses Mkdir rather than repairing missing parents.
+	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", linuxPath+"/mixed/.sync", linuxPath+"/native")
 	runCSINative(t, nativePath, filerPath, "write")
 	runCSIMixedRecovery(t, linuxPath, windowsPath, nativePath, filerPath, token, run, applyClient)
 	fmt.Println("CSI_RETAINED_MIXED_RECOVERY_COMPLETE")
