@@ -30,6 +30,9 @@ var clientRun = flag.String("csi-client-run", "", "explicit client name suffix f
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
+const csiLegacyPermissionUID uint32 = 0
+const csiLegacyPermissionGID uint32 = 0
+const csiLegacyPermissionMode uint32 = 0770
 const linuxImage = "docker.io/appmana/seaweedfs-csi-lab:linux-8e96856c1-b6bb02a"
 const windowsImage = "docker.io/appmana/seaweedfs-csi-lab:windows-8e96856c1-b6bb02a-native59ce0721f"
 

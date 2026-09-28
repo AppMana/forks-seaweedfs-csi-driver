@@ -51,7 +51,7 @@ func assertFixture(t *testing.T) {
 
 // Reuse the canonical suite's dynamic inventory, policy selection and strict
 // PASS/no-SKIP oracle. Do not dot-source its standalone mount bootstrap.
-func nativeSuiteScript(root, filerRoot, phase string) string {
+func nativeSuiteScript(root, filerRoot, phase string, legacyUID, legacyGID, legacyMode uint32) string {
 	return `$text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()));
 $tokens=$null; $errors=$null;
 $ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors);
@@ -66,7 +66,7 @@ $ExpectedWinFspDll='C:\tools\winfsp-x64.dll';
 $BasicPermissions=$false; $script:failures=0;
 $logDir=Join-Path $env:TEMP ('csi-native-'+[Guid]::NewGuid().ToString('N'));
 New-Item -ItemType Directory $logDir | Out-Null;
-Invoke-NativeMountedSuite -mnt ` + psLiteral(root) + ` -Phase ` + psLiteral(phase) + ` -FilerEndpoint '192.0.2.10:8888' -FilerRootPrefix ` + psLiteral(filerRoot) + `;
+Invoke-NativeMountedSuite -mnt ` + psLiteral(root) + ` -Phase ` + psLiteral(phase) + ` -FilerEndpoint '192.0.2.10:8888' -FilerRootPrefix ` + psLiteral(filerRoot) + ` -LegacyPermissionUID ` + fmt.Sprint(legacyUID) + ` -LegacyPermissionGID ` + fmt.Sprint(legacyGID) + ` -LegacyPermissionMode ` + fmt.Sprint(legacyMode) + `;
 if($script:failures){throw "native suite assertions failed: $script:failures"};
 Write-Output ` + psLiteral("CSI_NATIVE_COMPLETE:"+phase)
 }
@@ -100,12 +100,12 @@ func TestNativeSuiteTransport(t *testing.T) {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			source := `throw 'standalone bootstrap must never execute'
 function Assert([bool]$cond, [string]$what) { if(!$cond){$script:failures++} }
-function Invoke-NativeMountedSuite([string]$mnt, [string]$Phase, [string]$FilerEndpoint, [string]$FilerRootPrefix) {
+function Invoke-NativeMountedSuite([string]$mnt, [string]$Phase, [string]$FilerEndpoint, [string]$FilerRootPrefix, [uint32]$LegacyPermissionUID, [uint32]$LegacyPermissionGID, [uint32]$LegacyPermissionMode) {
  if($mnt -ne "C:\data\quote'root" -or $Phase -ne 'write' -or $FilerEndpoint -ne '192.0.2.10:8888' -or $FilerRootPrefix -ne "/buckets/pvc/quote'root"){throw 'lost scoped arguments'}
- if($BasicPermissions -or $WinFspTestExe -ne 'C:\tools\winfsp-csi.test.exe' -or $ExpectedWinFspDll -ne 'C:\tools\winfsp-x64.dll'){throw 'wrong CSI policy or tooling'}
+ if($BasicPermissions -or $WinFspTestExe -ne 'C:\tools\winfsp-csi.test.exe' -or $ExpectedWinFspDll -ne 'C:\tools\winfsp-x64.dll' -or $LegacyPermissionUID -ne 0 -or $LegacyPermissionGID -ne 0 -or $LegacyPermissionMode -ne 504){throw 'wrong CSI policy, identity or tooling'}
  Assert $` + fmt.Sprint(!fail) + ` 'simulated native outcome'
 }`
-			args := ps(nativeSuiteScript(`C:\data\quote'root`, "/buckets/pvc/quote'root", "write"))
+			args := ps(nativeSuiteScript(`C:\data\quote'root`, "/buckets/pvc/quote'root", "write", csiLegacyPermissionUID, csiLegacyPermissionGID, csiLegacyPermissionMode))
 			cmd := exec.Command(pwsh, args[1:]...)
 			cmd.Env = append(os.Environ(), "TEMP="+t.TempDir())
 			cmd.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString([]byte(source)))
@@ -123,7 +123,7 @@ func runCSINative(t *testing.T, root, filerRoot, phase string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := kubectlWithTimeout(25*time.Minute, []byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, clientName("windows"), "--"}, ps(nativeSuiteScript(root, filerRoot, phase))...)...)
+	out, err := kubectlWithTimeout(25*time.Minute, []byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, clientName("windows"), "--"}, ps(nativeSuiteScript(root, filerRoot, phase, csiLegacyPermissionUID, csiLegacyPermissionGID, csiLegacyPermissionMode))...)...)
 	t.Logf("CSI native phase %q:\n%s", phase, out)
 	if err != nil || !nativeComplete(string(out), phase) {
 		t.Fatalf("native phase %q failed or lacked completion evidence: %v", phase, err)
