@@ -158,6 +158,15 @@ func objects() []any {
 	backend.Spec.Volumes = []core.Volume{{Name: "data", VolumeSource: core.VolumeSource{EmptyDir: &core.EmptyDirVolumeSource{}}}}
 	backend.Spec.Containers[0].VolumeMounts = []core.VolumeMount{{Name: "data", MountPath: "/data"}}
 	o = append(o, backend)
+	// The default collection consumes the small embedded server's slots for
+	// filer logs. CSI allocates a separate collection per PVC: provide explicit
+	// additional slots instead of confusing slot exhaustion with disk capacity.
+	capacity := basePod("capacity", "linux")
+	capacity.Spec.HostNetwork = true
+	capacity.Spec.Containers = []core.Container{container("volume", linuxImage, []string{"/usr/bin/weed"}, "volume", "-ip=192.0.2.10", "-port=8081", "-master=192.0.2.10:9333", "-dir=/data", "-max=32")}
+	capacity.Spec.Volumes = []core.Volume{{Name: "data", VolumeSource: core.VolumeSource{EmptyDir: &core.EmptyDirVolumeSource{}}}}
+	capacity.Spec.Containers[0].VolumeMounts = []core.VolumeMount{{Name: "data", MountPath: "/data"}}
+	o = append(o, capacity)
 	controller := basePod("controller", "linux")
 	controller.Spec.ServiceAccountName = "csi"
 	controller.Spec.Containers = []core.Container{container("driver", linuxImage, []string{"/usr/local/bin/seaweedfs-csi-driver"}, "--endpoint=unix:///csi/csi.sock", "--filer=192.0.2.10:8888", "--driverName="+driver, "--components=controller", "--attacher=true")}
@@ -286,6 +295,10 @@ func TestCSIStockWinFsp(t *testing.T) {
 		apply(clientPod(platform))
 	}
 	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=10m")
+	token := fmt.Sprint(time.Now().UnixNano())
+	testLinuxRoot := "/data/qualification-" + token
+	testWindowsRoot := `C:\data\qualification-` + token
+	run("exec", "-n", ns, "client-linux", "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
 	stockEvidence := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(stockAttestation)...)...)
 	if !strings.Contains(string(stockEvidence), "STOCK_WINFSP_ATTESTED") {
 		t.Fatal("missing stock-driver evidence")
@@ -298,6 +311,8 @@ func TestCSIStockWinFsp(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitScript := `$p=Start-Process C:\tools\Git-2.51.0-64-bit.exe -Wait -PassThru -ArgumentList '/VERYSILENT','/NORESTART','/DIR=C:\Git'; if($p.ExitCode -ne 0){throw "Git installer exit $($p.ExitCode)"}; $env:PATH='C:\Git\cmd;'+$env:PATH; & git --version; if($LASTEXITCODE -ne 0){throw 'git unavailable'}; & git lfs version; if($LASTEXITCODE -ne 0){throw 'lfs unavailable'}; $text=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd())); $tokens=$null; $errors=$null; $ast=[Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors); if($errors.Count){throw 'regression source parse failed'}; foreach($name in @('Assert','Invoke-GitLfsTempMetadataTest')) { $f=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name},$true)); if($f.Count -ne 1){throw "expected exactly one function $name"}; Invoke-Expression $f[0].Extent.Text }; $script:failures=0; $GitIterations=20; Invoke-GitLfsTempMetadataTest C:\data; if($script:failures){throw "LFS assertions failed: $script:failures"}; Write-Output 'CSI_LFS_COMPLETE'`
+	// Retained reruns get a new directory; preserve every earlier failure artifact.
+	gitScript = strings.Replace(gitScript, `Invoke-GitLfsTempMetadataTest C:\data`, `Invoke-GitLfsTempMetadataTest `+testWindowsRoot, 1)
 	lfsOutput, err := kubectl([]byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, "client-windows", "--"}, ps(gitScript)...)...)
 	t.Logf("Git LFS regression: %s", lfsOutput)
 	if err != nil {
@@ -308,17 +323,15 @@ func TestCSIStockWinFsp(t *testing.T) {
 			t.Fatalf("missing LFS evidence: %s", marker)
 		}
 	}
-	run("exec", "-n", ns, "client-linux", "--", "mkdir", "-p", "/data/mixed/.sync")
-	token := fmt.Sprint(time.Now().UnixNano())
 	runPhase := func(phase string) {
 		var wg sync.WaitGroup
 		for _, platform := range []string{"linux", "windows"} {
 			wg.Add(1)
 			go func(platform string) {
 				defer wg.Done()
-				binary, root := "/usr/local/bin/mixed-linux", "/data/mixed"
+				binary, root := "/usr/local/bin/mixed-linux", testLinuxRoot+"/mixed"
 				if platform == "windows" {
-					binary, root = `C:\tools\mixed-windows.exe`, `C:\data\mixed`
+					binary, root = `C:\tools\mixed-windows.exe`, testWindowsRoot+`\mixed`
 				}
 				out, err := kubectl(nil, "exec", "-n", ns, "client-"+platform, "--", binary, root, platform, phase, token)
 				t.Logf("%s %s: %s", platform, phase, out)
