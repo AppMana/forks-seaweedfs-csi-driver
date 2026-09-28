@@ -1,10 +1,13 @@
 package kubernetes_lab
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	core "k8s.io/api/core/v1"
 )
@@ -28,13 +31,53 @@ func captureWindowsNetwork(t *testing.T) windowsNetworkSnapshot {
 	if id == "" {
 		t.Fatal("workload has no Calico sandbox identity")
 	}
-	out, err = kubectl(nil, append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(windowsNetworkSnapshotScript(id))...)...)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	args := append([]string{"kubectl", "exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(windowsNetworkSnapshotScript(id))...)
+	out, err = structuredCommandOutput(exec.CommandContext(ctx, "/usr/local/bin/k0s", args...))
 	t.Logf("Windows sandbox network evidence: %s", out)
 	var snapshot windowsNetworkSnapshot
 	if err != nil || json.Unmarshal(out, &snapshot) != nil || snapshot.NetworkID == "" || snapshot.EndpointID == "" || snapshot.NamespaceID == "" {
 		t.Fatalf("invalid or unhealthy sandbox network: %v %s", err, out)
 	}
 	return snapshot
+}
+
+func structuredCommandOutput(cmd *exec.Cmd) ([]byte, error) {
+	// PowerShell module autoload emits CLIXML progress on stderr even when the
+	// observation succeeds. Do not parse stderr as JSON or strip arbitrary lines
+	// from stdout; a malformed stdout must still fail the gate.
+	out, err := cmd.Output()
+	if failure, ok := err.(*exec.ExitError); ok {
+		return out, fmt.Errorf("%w: %s", err, failure.Stderr)
+	}
+	return out, err
+}
+
+func TestStructuredObservationSeparatesPowerShellProgress(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required for observation transport contract")
+	}
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprint(fail), func(t *testing.T) {
+			script := `[Console]::Error.WriteLine('#< CLIXML'); [Console]::Error.WriteLine('<Objs>progress diagnostic</Objs>'); '{"NetworkID":"network","EndpointID":"endpoint","NamespaceID":"namespace"}'`
+			if fail {
+				script += "; exit 23"
+			}
+			out, err := structuredCommandOutput(exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", script))
+			if fail {
+				if err == nil || !strings.Contains(err.Error(), "progress diagnostic") {
+					t.Fatalf("failed observation lost diagnostics: %v %s", err, out)
+				}
+				return
+			}
+			var got windowsNetworkSnapshot
+			if err != nil || json.Unmarshal(out, &got) != nil || got.NetworkID != "network" {
+				t.Fatalf("progress contaminated structured observation: %v %s", err, out)
+			}
+		})
+	}
 }
 
 func windowsNetworkSnapshotScript(id string) string {
