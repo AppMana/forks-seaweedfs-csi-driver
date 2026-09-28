@@ -304,6 +304,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 		apply(clientPod(platform))
 	}
 	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=10m")
+	checkController := watchCSIController(t)
 	token := fmt.Sprint(time.Now().UnixNano())
 	testLinuxRoot := "/data/qualification-" + token
 	testWindowsRoot := `C:\data\qualification-` + token
@@ -338,6 +339,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 	runCSINative(t, nativeRoot, nativeFilerRoot, "")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
 	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
+	checkController()
 	fmt.Println("CSI_QUALIFICATION_COMPLETE")
 }
 

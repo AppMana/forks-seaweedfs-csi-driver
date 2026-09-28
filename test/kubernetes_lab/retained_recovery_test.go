@@ -40,6 +40,7 @@ func TestCSIRetainedMixedRecovery(t *testing.T) {
 		}
 	}
 	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=45s")
+	checkController := watchCSIController(t)
 	stock := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(stockAttestation)...)...)
 	if !strings.Contains(string(stock), "STOCK_WINFSP_ATTESTED") {
 		t.Fatal("missing stock-driver evidence")
@@ -54,5 +55,6 @@ func TestCSIRetainedMixedRecovery(t *testing.T) {
 	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", linuxPath+"/mixed/.sync", linuxPath+"/native")
 	runCSINative(t, nativePath, filerPath, "write")
 	runCSIMixedRecovery(t, linuxPath, windowsPath, nativePath, filerPath, token, run, applyClient)
+	checkController()
 	fmt.Println("CSI_RETAINED_MIXED_RECOVERY_COMPLETE")
 }
