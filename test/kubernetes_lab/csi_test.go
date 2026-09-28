@@ -26,6 +26,7 @@ import (
 
 var live = flag.Bool("csi-live", false, "run only inside the disposable Labcontainers k0s controller")
 var smokeSource = flag.String("mount-smoke-source", "/mnt/qualification/mount-smoke.ps1", "existing SeaweedFS Git LFS regression source on hash-pinned offline media")
+var clientRun = flag.String("csi-client-run", "", "explicit client name suffix for independent A/B runs; never repairs or replaces a failed run")
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
@@ -126,8 +127,15 @@ func nodePod(platform string, mount bool) core.Pod {
 	}
 	return p
 }
+func clientName(platform string) string {
+	name := "client-" + platform
+	if *clientRun != "" {
+		name += "-" + *clientRun
+	}
+	return name
+}
 func clientPod(platform string) core.Pod {
-	p := basePod("client-"+platform, platform)
+	p := basePod(clientName(platform), platform)
 	image, path, cmd := linuxImage, "/data", []string{"sh", "-c", "sleep 86400"}
 	if platform == "windows" {
 		image, path, cmd = servercore, `C:\data`, ps("Start-Sleep -Seconds 86400")
@@ -218,6 +226,17 @@ func TestManifestContracts(t *testing.T) {
 		}
 	}
 }
+func TestClientRunNamesRemainScoped(t *testing.T) {
+	old := *clientRun
+	t.Cleanup(func() { *clientRun = old })
+	*clientRun = "preserve-b"
+	for _, platform := range []string{"linux", "windows"} {
+		p := clientPod(platform)
+		if p.Name != "client-"+platform+"-preserve-b" || p.Namespace != ns || p.Spec.Volumes[0].PersistentVolumeClaim.ClaimName != "shared" {
+			t.Fatalf("A/B client escaped expected namespace or PVC: %+v", p)
+		}
+	}
+}
 func TestCSIStockWinFsp(t *testing.T) {
 	if !*live {
 		t.Skip("requires disposable mixed-platform Labcontainers Kubernetes fixture")
@@ -273,14 +292,14 @@ func TestCSIStockWinFsp(t *testing.T) {
 	for _, platform := range []string{"linux", "windows"} {
 		// A retained-cluster rerun may change an immutable container command.
 		// Recreate only the lab's workload pods, preserving the PVC and data.
-		run("delete", "pod", "-n", ns, "client-"+platform, "--ignore-not-found=true", "--wait=true")
+		run("delete", "pod", "-n", ns, clientName(platform), "--ignore-not-found=true", "--wait=true")
 		apply(clientPod(platform))
 	}
-	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=10m")
+	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=10m")
 	token := fmt.Sprint(time.Now().UnixNano())
 	testLinuxRoot := "/data/qualification-" + token
 	testWindowsRoot := `C:\data\qualification-` + token
-	run("exec", "-n", ns, "client-linux", "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
+	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
 	stockEvidence := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(stockAttestation)...)...)
 	if !strings.Contains(string(stockEvidence), "STOCK_WINFSP_ATTESTED") {
 		t.Fatal("missing stock-driver evidence")
@@ -296,7 +315,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 	// Retained reruns get a new directory; preserve every earlier failure artifact.
 	gitScript = strings.Replace(gitScript, `Invoke-GitLfsTempMetadataTest C:\data`, `Invoke-GitLfsTempMetadataTest `+testWindowsRoot, 1)
 	gitScript = gitTrustScript(testWindowsRoot) + "; " + gitScript
-	lfsOutput, err := kubectl([]byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, "client-windows", "--"}, ps(gitScript)...)...)
+	lfsOutput, err := kubectl([]byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, clientName("windows"), "--"}, ps(gitScript)...)...)
 	t.Logf("Git LFS regression: %s", lfsOutput)
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +339,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 				if platform == "windows" {
 					binary, root = `C:\tools\mixed-windows.exe`, testWindowsRoot+`\mixed`
 				}
-				out, err := kubectl(nil, "exec", "-n", ns, "client-"+platform, "--", binary, root, platform, phase, token)
+				out, err := kubectl(nil, "exec", "-n", ns, clientName(platform), "--", binary, root, platform, phase, token)
 				t.Logf("%s %s: %s", platform, phase, out)
 				if err != nil {
 					t.Errorf("%s %s: %v", platform, phase, err)
@@ -339,10 +358,10 @@ func TestCSIStockWinFsp(t *testing.T) {
 		runPhase(phase)
 	}
 	for _, platform := range []string{"linux", "windows"} {
-		run("delete", "pod", "-n", ns, "client-"+platform, "--wait=true")
+		run("delete", "pod", "-n", ns, clientName(platform), "--wait=true")
 		apply(clientPod(platform))
 	}
-	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=10m")
+	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=10m")
 	runPhase("verify-remount")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "verify")
 	// A clean guest reboot is distinct from power loss. Require a new kernel
@@ -372,7 +391,7 @@ func TestCSIStockWinFsp(t *testing.T) {
 	if !rebooted {
 		t.Fatal("Windows did not return Ready with a different boot ID")
 	}
-	run("wait", "-n", ns, "pod/client-linux", "pod/client-windows", "--for=condition=Ready", "--timeout=5m")
+	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=5m")
 	runPhase("verify-remount")
 	runCSINative(t, nativeRoot, nativeFilerRoot, "verify")
 	fmt.Println("CSI_QUALIFICATION_COMPLETE")

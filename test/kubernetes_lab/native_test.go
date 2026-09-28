@@ -12,12 +12,18 @@ import (
 	"time"
 
 	core "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func psLiteral(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
 
 func assertFixture(t *testing.T) {
 	t.Helper()
+	for _, platform := range []string{"linux", "windows"} {
+		if errors := validation.IsDNS1123Label(clientName(platform)); len(errors) != 0 {
+			t.Fatalf("invalid explicit client run name: %v", errors)
+		}
+	}
 	if _, err := os.Stat("/mnt/qualification"); err != nil {
 		t.Fatal("offline fixture media missing", err)
 	}
@@ -117,7 +123,7 @@ func runCSINative(t *testing.T, root, filerRoot, phase string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := kubectlWithTimeout(25*time.Minute, []byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, "client-windows", "--"}, ps(nativeSuiteScript(root, filerRoot, phase))...)...)
+	out, err := kubectlWithTimeout(25*time.Minute, []byte(base64.StdEncoding.EncodeToString(source)), append([]string{"exec", "-i", "-n", ns, clientName("windows"), "--"}, ps(nativeSuiteScript(root, filerRoot, phase))...)...)
 	t.Logf("CSI native phase %q:\n%s", phase, out)
 	if err != nil || !nativeComplete(string(out), phase) {
 		t.Fatalf("native phase %q failed or lacked completion evidence: %v", phase, err)
@@ -146,7 +152,7 @@ func TestCSINativeWinFsp(t *testing.T) {
 		t.Skip("requires disposable mixed-platform Labcontainers Kubernetes fixture")
 	}
 	assertFixture(t)
-	out, err := kubectl(nil, "wait", "-n", ns, "pod/client-windows", "--for=condition=Ready", "--timeout=45s")
+	out, err := kubectl(nil, "wait", "-n", ns, "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=45s")
 	if err != nil {
 		t.Fatalf("existing CSI workload is not ready: %v %s", err, out)
 	}
