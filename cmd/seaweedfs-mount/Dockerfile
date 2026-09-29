@@ -6,7 +6,7 @@ ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e
 
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.0-alpine AS builder
 
 RUN apk add git g++
 

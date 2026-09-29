@@ -30,6 +30,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			source := read("cmd/seaweedfs-mount/" + file)
 			for _, required := range []string{
+				"golang:1.26.0",
 				"ARG SEAWEEDFS_COMMIT=" + match[1],
 				"ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs",
 				"ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e",
