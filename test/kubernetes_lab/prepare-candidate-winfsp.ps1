@@ -90,6 +90,10 @@ Assert-Hash $candidateDll $manifest.dll_sha256 'candidate DLL'
 $certificate = New-Object Security.Cryptography.X509Certificates.X509Certificate2($candidateCertificate)
 if ($certificate.Thumbprint -ine $manifest.certificate_thumbprint) { throw 'lab certificate digest does not match manifest' }
 if ($certificate.Subject -ine 'CN=AppMana WinFsp LAB ONLY') { throw "unexpected lab certificate subject: $($certificate.Subject)" }
+$now = [DateTime]::UtcNow
+if ($now -lt $certificate.NotBefore.ToUniversalTime() -or $now -ge $certificate.NotAfter.ToUniversalTime()) {
+    throw "lab certificate is outside its validity period: now=$($now.ToString('o')) notBefore=$($certificate.NotBefore.ToUniversalTime().ToString('o')) notAfter=$($certificate.NotAfter.ToUniversalTime().ToString('o'))"
+}
 $driverSignature = Get-AuthenticodeSignature -LiteralPath $candidateDriver
 if (!$driverSignature.SignerCertificate -or $driverSignature.SignerCertificate.Thumbprint -ine $manifest.certificate_thumbprint) {
     throw 'candidate driver signer does not match manifest'

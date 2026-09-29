@@ -112,3 +112,41 @@ func TestCandidatePreparationBootPolicyBehavior(t *testing.T) {
 		})
 	}
 }
+
+// Execute the actual pre-install certificate checks without touching Windows
+// stores, services or the clock. Only certificate acquisition is substituted.
+func TestCandidatePreparationCertificateValidity(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required")
+	}
+	b, err := os.ReadFile("prepare-candidate-winfsp.ps1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(b)
+	start := strings.Index(source, "$certificate = New-Object")
+	end := strings.Index(source, "$registryPath =")
+	if start < 0 || end <= start {
+		t.Fatal("certificate preflight boundaries missing")
+	}
+	for _, tc := range []struct {
+		name, before, after string
+		want                bool
+	}{
+		{"valid", "-1", "1", true},
+		{"future dated signer", "1", "2", false},
+		{"expired signer", "-2", "-1", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `$ErrorActionPreference='Stop';$now=[DateTime]::UtcNow;$manifest=[pscustomobject]@{certificate_thumbprint='581769D4AB466DF1B61FA2F7B4FD9B04C98D66E2'};$candidateCertificate='unused';$candidateDriver='unused';$fake=[pscustomobject]@{Thumbprint=$manifest.certificate_thumbprint;Subject='CN=AppMana WinFsp LAB ONLY';NotBefore=$now.AddHours(` + tc.before + `);NotAfter=$now.AddHours(` + tc.after + `)};function New-Object { $fake };function Get-AuthenticodeSignature { [pscustomobject]@{SignerCertificate=$fake} };` + source[start:end]
+			out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+			if (err == nil) != tc.want {
+				t.Fatalf("accepted=%v error=%v output=%s", err == nil, err, out)
+			}
+			if !tc.want && !strings.Contains(string(out), "outside its validity period") {
+				t.Fatalf("rejected for an unrelated reason: %s", out)
+			}
+		})
+	}
+}
