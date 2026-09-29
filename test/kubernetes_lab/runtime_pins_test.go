@@ -1,12 +1,62 @@
 package kubernetes_lab
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestLauncherForwardsExplicitCNI(t *testing.T) {
+	for _, cni := range []string{"calico-vxlan", "calico-bgp", "bogus"} {
+		t.Run(cni, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, sub := range []string{"bin", "test/kubernetes_lab"} {
+				if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range map[string]string{
+				"bin/git":                               `printf '%s\n' "$CNI_TEST_ROOT"`,
+				"bin/go":                                `if [ "$2" = '-c' ]; then printf 'fixture' > "$4"; else printf '%s' "$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS" > "$CNI_TEST_ROOT/args.json"; printf 'CSI_QUALIFICATION_COMPLETE\n'; fi`,
+				"test/kubernetes_lab/verify-runtime.sh": "exit 0",
+				"test/kubernetes_lab/verify-media.sh":   "exit 0",
+			} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body+"\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", "run.sh")
+			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"), "CNI_TEST_ROOT="+dir,
+				"CALICO_LAB_MODULE="+dir, "CSI_LAB_ARTIFACTS="+filepath.Join(dir, "artifacts"), "LABCONTAINERS_STATE_DIR="+filepath.Join(dir, "state"),
+				"LABCONTAINERS_CALICO_MEDIA=fixture", "LABCONTAINERS_CALICO_MEDIA_SHA256=fixture", "LABCONTAINERS_LABD=fixture",
+				"LABCONTAINERS_VM_IMAGE=fixture", "LABCONTAINERS_WINDOWS_IMAGE=fixture", "LABCONTAINERS_KUBERNETES_CNI="+cni)
+			out, err := cmd.CombinedOutput()
+			data, readErr := os.ReadFile(filepath.Join(dir, "args.json"))
+			if cni == "bogus" {
+				if err == nil || !os.IsNotExist(readErr) {
+					t.Fatalf("invalid CNI reached launch: %v %v %s", err, readErr, out)
+				}
+				return
+			}
+			var args []string
+			if err != nil || readErr != nil || json.Unmarshal(data, &args) != nil {
+				t.Fatalf("launch failed: %v %v %s", err, readErr, out)
+			}
+			found := false
+			for _, arg := range args {
+				if arg == "-csi-cni="+cni {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("selected CNI %s not forwarded to CSI oracle: %s", cni, data)
+			}
+		})
+	}
+}
 
 func TestRuntimePinChecker(t *testing.T) {
 	const revision = "56e537c59dcb051ae6dba677a557db2483b6fefc"
