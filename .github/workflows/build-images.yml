@@ -15,8 +15,9 @@ env:
   REGISTRY: ghcr.io/appmana
   IMAGE_TAG: v1.4.26-appmana.post.2
   # Pinned forks-seaweedfs commit providing weed.exe (WinFsp mount) and
-  # the weed linux binary; must have passed the forks-seaweedfs workflow.
-  SEAWEEDFS_COMMIT: 08e95eca88ac8b11f9d0759a25aeb33273d447cd
+  # the weed linux binary. Keep mount Dockerfile defaults and the build-pin
+  # contract aligned. Source qualification does not qualify rebuilt image bytes.
+  SEAWEEDFS_COMMIT: 8ecd3e03f9fb7b4361cce12cd439520bfef00ca1
 
 jobs:
   metadata:
