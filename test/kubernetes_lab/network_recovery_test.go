@@ -3,6 +3,7 @@ package kubernetes_lab
 import (
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -16,6 +17,25 @@ type windowsNetworkSnapshot struct {
 	NetworkID   string
 	EndpointID  string
 	NamespaceID string
+}
+
+// Match the native Labcontainers matrix names. Never infer the expected mode
+// from the observed HNS type: that would accept a misconfigured fixture.
+type csiCNI string
+
+var selectedCNI csiCNI = "calico-vxlan"
+
+func init() {
+	flag.Var(&selectedCNI, "csi-cni", "expected matrix CNI: calico-vxlan or calico-bgp")
+}
+
+func (c *csiCNI) String() string { return string(*c) }
+func (c *csiCNI) Set(value string) error {
+	if value != "calico-vxlan" && value != "calico-bgp" {
+		return fmt.Errorf("unsupported CSI CNI %q: require calico-vxlan or calico-bgp", value)
+	}
+	*c = csiCNI(value)
+	return nil
 }
 
 // Inspect only this test's sandbox. An unrelated retained failed namespace is
@@ -81,9 +101,13 @@ func TestStructuredObservationSeparatesPowerShellProgress(t *testing.T) {
 }
 
 func windowsNetworkSnapshotScript(id string) string {
+	networkType := "Overlay"
+	if selectedCNI == "calico-bgp" {
+		networkType = "L2Bridge"
+	}
 	return `$sandbox=` + psLiteral(id) + `;
-$networks=@(Get-HnsNetwork | Where-Object {$_.Name -eq 'Calico' -and $_.Type -eq 'Overlay'});
-if($networks.Count -ne 1){throw 'expected one Calico Overlay network'};
+$networks=@(Get-HnsNetwork | Where-Object {$_.Name -eq 'Calico' -and $_.Type -eq ` + psLiteral(networkType) + `});
+if($networks.Count -ne 1){throw ` + psLiteral("expected one Calico "+networkType+" network") + `};
 $endpoints=@(Get-HnsEndpoint | Where-Object {$_.Name -eq ($sandbox+'_Calico')});
 if($endpoints.Count -ne 1){throw 'current sandbox endpoint is missing or ambiguous'};
 if($endpoints[0].VirtualNetwork -ne $networks[0].ID){throw 'sandbox endpoint belongs to wrong network'};
@@ -98,6 +122,9 @@ if($refs.Count -ne 1 -or $refs[0].Data.Id -ne $endpoints[0].ID){throw 'sandbox n
 // These contracts do not substitute for the real reboot gate: they ensure the
 // gate cannot accept the dangling namespace observed in the retained lab.
 func TestWindowsNetworkSnapshotRejectsDanglingState(t *testing.T) {
+	old := selectedCNI
+	selectedCNI = "calico-vxlan"
+	t.Cleanup(func() { selectedCNI = old })
 	pwsh, err := exec.LookPath("pwsh")
 	if err != nil {
 		t.Skip("PowerShell required for HNS observation script contracts")
@@ -138,10 +165,59 @@ function Get-HnsNamespace { $namespace }
 	}
 }
 
+func TestWindowsNetworkSnapshotExplicitCNI(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("PowerShell required for network flavor contracts")
+	}
+	selection := flag.Lookup("csi-cni")
+	if selection == nil {
+		t.Fatal("CSI recovery has no explicit CNI selection; BGP L2bridge cannot be qualified")
+	}
+	old := selection.Value.String()
+	t.Cleanup(func() { _ = selection.Value.Set(old) })
+	for _, tc := range []struct {
+		cni, network string
+		accepted     bool
+	}{
+		{"calico-vxlan", "Overlay", true},
+		{"calico-bgp", "L2Bridge", true},
+		{"calico-bgp", "Overlay", false},
+		{"calico-vxlan", "L2Bridge", false},
+	} {
+		t.Run(tc.cni+"/"+tc.network, func(t *testing.T) {
+			if err := selection.Value.Set(tc.cni); err != nil {
+				t.Fatal(err)
+			}
+			fixture := `$ErrorActionPreference='Stop';
+function Get-HnsNetwork { [pscustomobject]@{Name='Calico';Type=` + psLiteral(tc.network) + `;ID='network'} }
+function Get-HnsEndpoint { [pscustomobject]@{Name='sandbox_Calico';ID='endpoint';VirtualNetwork='network'} }
+function Get-HnsNamespace { [pscustomobject]@{ID='namespace';IsDefault=$false;Containers=@('sandbox');ResourceList=@([pscustomobject]@{Type='Endpoint';Data=[pscustomobject]@{Id='endpoint'}})} }
+`
+			out, err := exec.Command(pwsh, "-NoProfile", "-NonInteractive", "-Command", fixture+windowsNetworkSnapshotScript("sandbox")).CombinedOutput()
+			if !tc.accepted {
+				if err == nil || !strings.Contains(string(out), "expected one Calico") {
+					t.Fatalf("wrong network accepted: %v %s", err, out)
+				}
+				return
+			}
+			var got windowsNetworkSnapshot
+			if err != nil || json.Unmarshal(out, &got) != nil || got != (windowsNetworkSnapshot{"network", "endpoint", "namespace"}) {
+				t.Fatalf("valid network rejected: %v %s", err, out)
+			}
+		})
+	}
+	for _, invalid := range []string{"", "bogus", "kuberouter", "Calico-BGP"} {
+		if err := selection.Value.Set(invalid); err == nil {
+			t.Fatalf("invalid CNI %q accepted", invalid)
+		}
+	}
+}
+
 func assertNetworkPreserved(t *testing.T, before, after windowsNetworkSnapshot) {
 	t.Helper()
 	if !strings.EqualFold(before.NetworkID, after.NetworkID) {
-		t.Fatalf("healthy Overlay was destroyed across reboot: before=%+v after=%+v", before, after)
+		t.Fatalf("healthy %s network was destroyed across reboot: before=%+v after=%+v", selectedCNI, before, after)
 	}
 	// A runtime may replace its sandbox across a reboot. captureWindowsNetwork
 	// independently requires the resulting namespace's endpoint to exist; do not

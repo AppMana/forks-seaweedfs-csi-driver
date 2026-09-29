@@ -349,6 +349,8 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		apply(clientPod(platform))
 	}
 	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=10m")
+	// Reject a mismatched matrix/network before the expensive filesystem suite.
+	captureWindowsNetwork(t)
 	checkController := watchCSIController(t)
 	token := fmt.Sprint(time.Now().UnixNano())
 	testLinuxRoot := "/data/qualification-" + token
