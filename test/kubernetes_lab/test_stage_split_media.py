@@ -7,12 +7,18 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import stage_split_media as stage
 
 
 class SplitMediaTest(unittest.TestCase):
+    def test_msi_rejects_manual_driver_certificate_before_composition(self):
+        with patch.object(stage.subprocess, 'check_output', return_value='subject=CN=AppMana WinFsp LAB ONLY\n'):
+            with self.assertRaisesRegex(ValueError, 'expected MSI lab certificate'):
+                stage.certificate_identity(Path('unused.der'))
+
     def test_pin_rejects_changed_input(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'input'
@@ -40,7 +46,7 @@ class SplitMediaTest(unittest.TestCase):
                             str(base), str(inputs)], check=True, capture_output=True)
             cert = root / 'cert.der'
             subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-                            '-subj', '/CN=AppMana WinFsp LAB ONLY', '-days', '1',
+                            '-subj', '/CN=AppMana WinFsp MSI LAB ONLY', '-days', '1',
                             '-keyout', str(root / 'key.pem'), '-outform', 'DER', '-out', str(cert)],
                            check=True, capture_output=True)
             native = root / 'native.exe'

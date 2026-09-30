@@ -51,7 +51,7 @@ Assert-Pin $msi ` + psLiteral(msiSHA) + `
 Assert-Pin $native ` + psLiteral(nativeSHA) + `
 $cert=New-Object Security.Cryptography.X509Certificates.X509Certificate2((Join-Path $root 'candidate.cer'))
 if($cert.Thumbprint -ine ` + psLiteral(manifest.CertificateThumbprint) + `){throw 'candidate certificate mismatch'}
-if($cert.Subject -ine 'CN=AppMana WinFsp LAB ONLY'){throw 'not a lab certificate'}
+if($cert.Subject -ine 'CN=AppMana WinFsp MSI LAB ONLY'){throw 'not an MSI lab certificate'}
 $now=[DateTime]::UtcNow
 if($now -lt $cert.NotBefore.ToUniversalTime() -or $now -ge $cert.NotAfter.ToUniversalTime()){throw 'certificate outside validity period'}
 foreach($store in @('Root','TrustedPublisher')){
@@ -72,6 +72,43 @@ Copy-Item -LiteralPath $native -Destination ` + psLiteral(nativePath) + `
 Assert-Pin ` + psLiteral(nativePath) + ` ` + psLiteral(nativeSHA) + `
 Write-Output 'CSI_MSI_INSTALLED_REBOOT_REQUIRED'
 `, nil
+}
+
+func bootstrapPodResult(p *core.Pod) (bool, error) {
+	for _, c := range append(append([]core.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+		if exit := c.State.Terminated; exit != nil && exit.ExitCode != 0 {
+			return false, fmt.Errorf("bootstrap pod %s container %s failed: exit=%d reason=%s message=%s", p.Name, c.Name, exit.ExitCode, exit.Reason, exit.Message)
+		}
+	}
+	if p.Status.Phase == core.PodFailed {
+		return false, fmt.Errorf("bootstrap pod %s failed: %s %s", p.Name, p.Status.Reason, p.Status.Message)
+	}
+	return p.Status.Phase == core.PodSucceeded, nil
+}
+
+func waitBootstrapPod(t *testing.T, name string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var last error
+	for time.Now().Before(deadline) {
+		out, err := kubectlWithTimeout(15*time.Second, nil, "get", "pod", name, "-n", ns, "-o", "json")
+		var p core.Pod
+		if err == nil {
+			err = json.Unmarshal(out, &p)
+		}
+		if err == nil {
+			done, failure := bootstrapPodResult(&p)
+			if failure != nil {
+				t.Fatal(failure)
+			}
+			if done {
+				return
+			}
+		}
+		last = err
+		time.Sleep(time.Second)
+	}
+	t.Fatalf("bootstrap pod %s did not succeed within %s (last observation error: %v)", name, timeout, last)
 }
 
 func bootstrapCandidateMSI(t *testing.T, manifest candidateManifest) {
@@ -121,7 +158,7 @@ func bootstrapCandidateMSI(t *testing.T, manifest candidateManifest) {
 		}
 	}()
 	apply(makePod("candidate-msi-install", script))
-	run("wait", "-n", ns, "pod/candidate-msi-install", "--for=jsonpath={.status.phase}=Succeeded", "--timeout=5m")
+	waitBootstrapPod(t, "candidate-msi-install", 5*time.Minute)
 	if !containsExactLine(string(run("logs", "-n", ns, "candidate-msi-install")), "CSI_MSI_INSTALLED_REBOOT_REQUIRED") {
 		t.Fatal("missing install evidence")
 	}
@@ -130,7 +167,7 @@ func bootstrapCandidateMSI(t *testing.T, manifest candidateManifest) {
 		t.Fatal("missing pre-reboot identity")
 	}
 	apply(makePod("candidate-msi-reboot", `& shutdown.exe /r /t 10 /f; if($LASTEXITCODE -ne 0){throw 'reboot request failed'}`))
-	run("wait", "-n", ns, "pod/candidate-msi-reboot", "--for=jsonpath={.status.phase}=Succeeded", "--timeout=2m")
+	waitBootstrapPod(t, "candidate-msi-reboot", 2*time.Minute)
 	deadline := time.Now().Add(6 * time.Minute)
 	for time.Now().Before(deadline) {
 		out, err := kubectlWithTimeout(20*time.Second, nil, "get", "node", "windows", "-o", "json")

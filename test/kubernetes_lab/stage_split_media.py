@@ -19,6 +19,18 @@ def pinned(path, expected):
         raise ValueError(f'input digest mismatch: {path}')
 
 
+def certificate_identity(path):
+    subject = subprocess.check_output([
+        'openssl', 'x509', '-inform', 'DER', '-in', str(path),
+        '-noout', '-subject', '-nameopt', 'RFC2253'], text=True).strip()
+    if subject != 'subject=CN=AppMana WinFsp MSI LAB ONLY':
+        raise ValueError(f'expected MSI lab certificate, got {subject}')
+    thumb = subprocess.check_output([
+        'openssl', 'x509', '-inform', 'DER', '-in', str(path),
+        '-noout', '-fingerprint', '-sha1'], text=True).strip().split('=')[1].replace(':', '')
+    return thumb
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     for name in ('base', 'images_manifest', 'package_results', 'certificate', 'native'):
@@ -28,6 +40,7 @@ def main():
     args = p.parse_args()
     for name in ('base', 'images_manifest', 'package_results', 'certificate', 'native'):
         pinned(getattr(args, name), getattr(args, name + '_sha256'))
+    thumb = certificate_identity(args.certificate)
     args.output.mkdir(parents=True, exist_ok=False)
     with zipfile.ZipFile(args.package_results) as archive:
         package = json.loads(archive.read('package-manifest.json'))
@@ -37,8 +50,6 @@ def main():
     if hashlib.sha256(msi).hexdigest() != package['package_sha256']:
         raise ValueError('MSI digest mismatch')
     (args.output / 'candidate.msi').write_bytes(msi)
-    thumb = subprocess.check_output(['openssl', 'x509', '-inform', 'DER', '-in', str(args.certificate),
-                                    '-noout', '-fingerprint', '-sha1'], text=True).strip().split('=')[1].replace(':', '')
     payload = package['payload']
     candidate = dict(lab_only=True, certificate_thumbprint=thumb,
                      driver_source_revision=payload['source_revision'],
