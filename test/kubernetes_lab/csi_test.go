@@ -348,6 +348,7 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	if err := validateSplitImages(); err != nil {
 		t.Fatal(err)
 	}
+	prepareSplitOfflineImages(t)
 	if *candidateMSISHA256 != "" {
 		if candidate == nil {
 			t.Fatal("MSI bootstrap requires the candidate lane")
