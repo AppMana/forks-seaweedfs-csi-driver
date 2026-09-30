@@ -9,6 +9,45 @@ import (
 	"testing"
 )
 
+func TestLauncherSelectsCandidateBundle(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"bin", "test/kubernetes_lab"} {
+		if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, body := range map[string]string{
+		"bin/git":                               `printf '%s\n' "$CNI_TEST_ROOT"`,
+		"bin/go":                                `if [ "$2" = '-c' ]; then printf 'fixture' > "$4"; else printf '%s' "$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS" > "$CNI_TEST_ROOT/args.json"; printf '%s\n' "$LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS"; fi`,
+		"test/kubernetes_lab/verify-runtime.sh": "exit 0",
+		"test/kubernetes_lab/verify-media.sh":   "exit 0",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body+"\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Stub only bundle validation here; its fail-closed behavior has executable
+	// Python tests. Exercise the real shell launch path and success-marker gate.
+	body := `import json, sys
+assert sys.argv[1:] == ['--launch-bundle', 'candidate-bundle', '--cni', 'calico-bgp']
+print(json.dumps({'args':['-test.run=^TestCSICandidateWinFsp$', '-csi-cni=calico-bgp'], 'success':'CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE'}))
+`
+	if err := os.WriteFile(filepath.Join(dir, "test/kubernetes_lab/stage_split_media.py"), []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "run.sh")
+	cmd.Env = append(os.Environ(), "PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"), "CNI_TEST_ROOT="+dir,
+		"CALICO_LAB_MODULE="+dir, "CSI_LAB_ARTIFACTS="+filepath.Join(dir, "artifacts"), "LABCONTAINERS_STATE_DIR="+filepath.Join(dir, "state"),
+		"LABCONTAINERS_CALICO_MEDIA=fixture", "LABCONTAINERS_CALICO_MEDIA_SHA256=fixture", "LABCONTAINERS_LABD=fixture",
+		"LABCONTAINERS_VM_IMAGE=fixture", "LABCONTAINERS_WINDOWS_IMAGE=fixture", "LABCONTAINERS_KUBERNETES_CNI=calico-bgp",
+		"CSI_CANDIDATE_BUNDLE=candidate-bundle")
+	out, err := cmd.CombinedOutput()
+	data, readErr := os.ReadFile(filepath.Join(dir, "args.json"))
+	if err != nil || readErr != nil || !strings.Contains(string(data), "^TestCSICandidateWinFsp$") || strings.Contains(string(data), "TestCSIStockWinFsp") {
+		t.Fatalf("candidate bundle selected wrong consumer: %v %v args=%s output=%s", err, readErr, data, out)
+	}
+}
+
 func TestLauncherForwardsExplicitCNI(t *testing.T) {
 	for _, cni := range []string{"calico-vxlan", "calico-bgp", "bogus"} {
 		t.Run(cni, func(t *testing.T) {

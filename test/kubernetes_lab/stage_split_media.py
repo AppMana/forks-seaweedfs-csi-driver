@@ -3,7 +3,9 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
 import subprocess
 import tarfile
 import zipfile
@@ -31,13 +33,72 @@ def certificate_identity(path):
     return thumb
 
 
+def launch_spec(bundle, cni):
+    """Validate a composed bundle and select its existing candidate consumer.
+
+    This is argument validation, not qualification evidence. The native fixture
+    verifies the actual ISO digest before starting VMs; guest oracles verify the
+    contained MSI, native executable, driver and runtime image identities.
+    """
+    if cni not in ('calico-vxlan', 'calico-bgp'):
+        raise ValueError('unsupported CSI CNI')
+    inputs = json.loads((bundle / 'inputs.json').read_text())
+    if (Path(os.environ['LABCONTAINERS_CALICO_MEDIA']).resolve() !=
+            (bundle / 'qualification.iso').resolve() or
+            os.environ['LABCONTAINERS_CALICO_MEDIA_SHA256'] != inputs['iso_sha256'] or
+            not re.fullmatch('[0-9a-f]{64}', inputs['iso_sha256'])):
+        raise ValueError('candidate bundle does not match the selected offline media')
+    args = json.loads((bundle / 'workload-args.json').read_text())
+    if not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+        raise ValueError('expected a string argument array')
+    values = {}
+    for arg in args:
+        key, _, value = arg.partition('=')
+        if key in values:
+            raise ValueError('duplicate workload argument: '+key)
+        values[key] = value
+    if values.get('-csi-cni') not in ('calico-vxlan', 'calico-bgp'):
+        raise ValueError('invalid bundled CSI CNI')
+    expected = {
+        '-test.v': '', '-test.run': '^TestCSICandidateWinFsp$', '-test.timeout': '35m',
+        '-csi-live': '', '-csi-cni': values['-csi-cni'],
+        '-csi-candidate-manifest': '/mnt/qualification/candidate.json',
+        '-csi-candidate-manifest-sha256': sha(bundle / 'candidate.json'),
+        '-csi-candidate-msi-sha256': inputs['package_sha256'],
+        '-csi-native-test-executable': r'C:\tools\winfsp-csi-candidate.test.exe',
+        '-csi-candidate-native-test-sha256': inputs['inputs']['native_sha256'],
+    }
+    pinned(bundle / 'candidate.msi', inputs['package_sha256'])
+    if not re.fullmatch('[0-9a-f]{64}', inputs['inputs']['native_sha256']):
+        raise ValueError('invalid native executable digest')
+    for role in ('driver', 'mount'):
+        for platform in ('linux', 'windows'):
+            key = f'-csi-{role}-{platform}-image'
+            value = values.get(key, '')
+            if not re.fullmatch(r'[a-zA-Z0-9./:_-]+@sha256:[0-9a-f]{64}', value):
+                raise ValueError('missing or unpinned final image: '+key)
+            expected[key] = value
+    if values != expected:
+        raise ValueError('candidate workload arguments differ from the composed bundle contract')
+    return {'args': ['-csi-cni='+cni if a.startswith('-csi-cni=') else a for a in args],
+            'success': 'CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE'}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--launch-bundle', type=Path)
+    p.add_argument('--cni', choices=('calico-vxlan', 'calico-bgp'), default='calico-vxlan')
     for name in ('base', 'images_manifest', 'package_results', 'certificate', 'native'):
-        p.add_argument('--' + name.replace('_', '-'), type=Path, required=True)
-        p.add_argument('--' + name.replace('_', '-') + '-sha256', required=True)
-    p.add_argument('--output', type=Path, required=True)
+        p.add_argument('--' + name.replace('_', '-'), type=Path)
+        p.add_argument('--' + name.replace('_', '-') + '-sha256')
+    p.add_argument('--output', type=Path)
     args = p.parse_args()
+    if args.launch_bundle:
+        print(json.dumps(launch_spec(args.launch_bundle, args.cni)))
+        return
+    if args.output is None or any(getattr(args, name) is None or getattr(args, name+'_sha256') is None
+                                 for name in ('base', 'images_manifest', 'package_results', 'certificate', 'native')):
+        p.error('composition requires --output and all five explicit input paths and SHA-256 pins')
     for name in ('base', 'images_manifest', 'package_results', 'certificate', 'native'):
         pinned(getattr(args, name), getattr(args, name + '_sha256'))
     thumb = certificate_identity(args.certificate)
@@ -59,7 +120,7 @@ def main():
     candidate_path = args.output / 'candidate.json'
     candidate_path.write_text(json.dumps(candidate, indent=2) + '\n')
     workload = ['-test.v', '-test.run=^TestCSICandidateWinFsp$', '-test.timeout=35m', '-csi-live',
-                '-csi-cni=calico-vxlan', '-csi-candidate-manifest=/mnt/qualification/candidate.json',
+                '-csi-cni=' + args.cni, '-csi-candidate-manifest=/mnt/qualification/candidate.json',
                 '-csi-candidate-manifest-sha256=' + sha(candidate_path),
                 '-csi-candidate-msi-sha256=' + package['package_sha256'],
                 r'-csi-native-test-executable=C:\tools\winfsp-csi-candidate.test.exe',

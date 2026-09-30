@@ -26,9 +26,6 @@ bash "$csi_repo/test/kubernetes_lab/verify-media.sh" "$LABCONTAINERS_CALICO_MEDI
 mkdir -p "$CSI_LAB_ARTIFACTS"
 export GOWORK=off
 export LABCONTAINERS_KUBERNETES_WORKLOAD="$CSI_LAB_ARTIFACTS/kubernetes-workload"
-(cd "$csi_repo" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$LABCONTAINERS_KUBERNETES_WORKLOAD" ./test/kubernetes_lab)
-LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256=$(sha256sum "$LABCONTAINERS_KUBERNETES_WORKLOAD" | cut -d ' ' -f 1)
-export LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256
 export LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS="[\"-test.v\",\"-test.run=^TestCSIStockWinFsp$\",\"-test.timeout=35m\",\"-csi-live\",\"-csi-cni=$LABCONTAINERS_KUBERNETES_CNI\"]"
 # Optional production-layout lane: retain the lab images only for test tools.
 # Require a complete digest-pinned set before starting any VM.
@@ -46,7 +43,19 @@ for role in driver mount; do
 done
 [[ "$split_count" == 0 || "$split_count" == 4 ]] || { echo 'Provide all four CSI split image references' >&2; exit 1; }
 export LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS=CSI_QUALIFICATION_COMPLETE
+# stage_split_media.py produces the final-image + patched-MSI bundle. Explicit
+# selection cannot silently fall back to the stock-driver qualification lane.
+if [[ -n "${CSI_CANDIDATE_BUNDLE:-}" ]]; then
+ [[ "$split_count" == 0 ]] || { echo 'Candidate bundle already pins all four images; do not override them' >&2; exit 1; }
+ candidate_spec=$(python3 "$csi_repo/test/kubernetes_lab/stage_split_media.py" --launch-bundle "$CSI_CANDIDATE_BUNDLE" --cni "$LABCONTAINERS_KUBERNETES_CNI")
+ LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS=$(jq -ce '.args' <<<"$candidate_spec")
+ LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS=$(jq -er '.success' <<<"$candidate_spec")
+fi
+printf '%s\n' "$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS" > "$CSI_LAB_ARTIFACTS/launched-workload-args.json"
+(cd "$csi_repo" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$LABCONTAINERS_KUBERNETES_WORKLOAD" ./test/kubernetes_lab)
+LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256=$(sha256sum "$LABCONTAINERS_KUBERNETES_WORKLOAD" | cut -d ' ' -f 1)
+export LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256
 cd "$CALICO_LAB_MODULE"
 go test -v -count=1 -run '^TestLiveK0sWindowsNetwork$' -timeout=90m . 2>&1 | tee "$CSI_LAB_ARTIFACTS/live.log"
 # go test returns success on skipped tests; require evidence of the consumer.
-grep -q 'CSI_QUALIFICATION_COMPLETE' "$CSI_LAB_ARTIFACTS/live.log"
+grep -Fq "$LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS" "$CSI_LAB_ARTIFACTS/live.log"

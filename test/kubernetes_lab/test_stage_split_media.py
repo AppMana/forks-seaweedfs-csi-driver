@@ -14,6 +14,49 @@ import stage_split_media as stage
 
 
 class SplitMediaTest(unittest.TestCase):
+    def test_candidate_launch_is_explicit_and_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = root / 'candidate.json'
+            candidate.write_text('{}')
+            msi = root / 'candidate.msi'
+            msi.write_bytes(b'msi')
+            inputs = {'iso_sha256': 'a'*64, 'package_sha256': stage.sha(msi),
+                      'inputs': {'native_sha256': 'b'*64}}
+            (root / 'inputs.json').write_text(json.dumps(inputs))
+            args = ['-test.v', '-test.run=^TestCSICandidateWinFsp$', '-test.timeout=35m',
+                    '-csi-live', '-csi-cni=calico-vxlan',
+                    '-csi-candidate-manifest=/mnt/qualification/candidate.json',
+                    '-csi-candidate-manifest-sha256='+stage.sha(candidate),
+                    '-csi-candidate-msi-sha256='+stage.sha(msi),
+                    r'-csi-native-test-executable=C:\tools\winfsp-csi-candidate.test.exe',
+                    '-csi-candidate-native-test-sha256='+'b'*64]
+            for role in ('driver', 'mount'):
+                for platform in ('linux', 'windows'):
+                    args.append(f'-csi-{role}-{platform}-image=example.test/{role}:{platform}@sha256:'+ 'c'*64)
+            path = root / 'workload-args.json'
+            path.write_text(json.dumps(args))
+            env = {'LABCONTAINERS_CALICO_MEDIA': str(root / 'qualification.iso'),
+                   'LABCONTAINERS_CALICO_MEDIA_SHA256': 'a'*64}
+            with patch.dict('os.environ', env):
+                for cni in ('calico-vxlan', 'calico-bgp'):
+                    spec = stage.launch_spec(root, cni)
+                    self.assertIn('-csi-cni='+cni, spec['args'])
+                    self.assertEqual(spec['success'], 'CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE')
+                for bad in (args[:-1], args+['-test.run=^TestCSIStockWinFsp$'],
+                            args+['-csi-existing-token=other'],
+                            [a.replace('b'*64, 'd'*64) for a in args]):
+                    path.write_text(json.dumps(bad))
+                    with self.assertRaises(ValueError):
+                        stage.launch_spec(root, 'calico-vxlan')
+                path.write_text(json.dumps(args))
+                with patch.dict('os.environ', LABCONTAINERS_CALICO_MEDIA_SHA256='d'*64):
+                    with self.assertRaises(ValueError):
+                        stage.launch_spec(root, 'calico-vxlan')
+                with patch.dict('os.environ', LABCONTAINERS_CALICO_MEDIA='/unrelated.iso'):
+                    with self.assertRaises(ValueError):
+                        stage.launch_spec(root, 'calico-vxlan')
+
     def test_msi_rejects_manual_driver_certificate_before_composition(self):
         with patch.object(stage.subprocess, 'check_output', return_value='subject=CN=AppMana WinFsp LAB ONLY\n'):
             with self.assertRaisesRegex(ValueError, 'expected MSI lab certificate'):
