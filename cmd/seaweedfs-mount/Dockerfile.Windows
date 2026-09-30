@@ -64,8 +64,14 @@ RUN test -n "$WEED_SHA256" && test -n "$MOUNT_SHA256" && test -n "$WINFSP_MSI_SH
     && echo "$MOUNT_SHA256  /out/seaweedfs-mount.exe" | sha256sum -c - \
     && echo "$WINFSP_MSI_SHA256  /out/winfsp.msi" | sha256sum -c -
 
+FROM --platform=linux/amd64 alpine AS verified-dll
+ARG WINFSP_DLL_SHA256
+COPY winfsp-x64.dll /out/winfsp-x64.dll
+RUN test -n "$WINFSP_DLL_SHA256" \
+    && echo "$WINFSP_DLL_SHA256  /out/winfsp-x64.dll" | sha256sum -c -
+
 FROM --platform=linux/amd64 ${PAYLOAD_STAGE} AS payload
-FROM mcr.microsoft.com/oss/kubernetes/windows-host-process-containers-base-image:v1.0.0
+FROM mcr.microsoft.com/oss/kubernetes/windows-host-process-containers-base-image:v1.0.0 AS stock
 
 COPY --from=payload /out/weed.exe /weed.exe
 COPY --from=payload /out/seaweedfs-mount.exe /seaweedfs-mount.exe
@@ -74,3 +80,11 @@ COPY --from=payload /out/winfsp.msi /winfsp.msi
 ENV PATH="C:\Windows\system32;C:\Windows;C:\WINDOWS\System32\WindowsPowerShell\v1.0\;"
 USER ContainerAdministrator
 ENTRYPOINT ["/seaweedfs-mount.exe"]
+
+# App-local DLL lookup is used by cgofuse before its registry fallback.
+# No host registry, installed DLL, kernel driver or signing policy changes.
+FROM stock AS dll-only
+COPY --from=verified-dll /out/winfsp-x64.dll /winfsp-x64.dll
+
+# Preserve the existing default until the DLL-only CSI image is qualified.
+FROM stock AS default

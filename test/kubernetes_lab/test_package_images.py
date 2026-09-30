@@ -20,6 +20,18 @@ def tar_bytes(files):
 
 
 class PackageImages(unittest.TestCase):
+    def test_dll_only_target_preserves_stock_driver_installer(self):
+        dockerfile = (Path(__file__).resolve().parents[2] /
+                      'cmd/seaweedfs-mount/Dockerfile.Windows').read_text()
+        self.assertIn('AS stock', dockerfile)
+        self.assertIn('FROM stock AS dll-only', dockerfile)
+        dll_stage = dockerfile.split('FROM stock AS dll-only', 1)[1]
+        self.assertIn('COPY --from=verified-dll /out/winfsp-x64.dll /winfsp-x64.dll', dll_stage)
+        self.assertNotIn('.sys', dll_stage)
+        self.assertNotIn('msiexec', dll_stage)
+        self.assertIn('ARG WINFSP_DLL_SHA256', dockerfile)
+        self.assertIn('$WINFSP_DLL_SHA256  /out/winfsp-x64.dll', dockerfile)
+
     def test_oci_identity_and_corruption_controls(self):
         payload = b'qualified executable fixture'
         want = {'weed.exe': hashlib.sha256(payload).hexdigest()}
