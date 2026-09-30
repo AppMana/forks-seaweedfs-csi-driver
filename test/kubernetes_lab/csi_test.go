@@ -31,6 +31,44 @@ var nativeTestExecutable = flag.String("csi-native-test-executable", `C:\tools\w
 var candidateManifestPath = flag.String("csi-candidate-manifest", "", "explicit lab-only WinFsp candidate build manifest")
 var candidateManifestSHA256 = flag.String("csi-candidate-manifest-sha256", "", "immutable SHA-256 of the candidate build manifest")
 var candidateNativeTestSHA256 = flag.String("csi-candidate-native-test-sha256", "", "immutable SHA-256 of the separately staged candidate native test executable")
+var splitImages = map[string]*string{
+	"driver-linux":   flag.String("csi-driver-linux-image", "", "digest-pinned final Linux driver image; provide all four split images"),
+	"mount-linux":    flag.String("csi-mount-linux-image", "", "digest-pinned final Linux mount image"),
+	"driver-windows": flag.String("csi-driver-windows-image", "", "digest-pinned final Windows driver image"),
+	"mount-windows":  flag.String("csi-mount-windows-image", "", "digest-pinned final Windows mount image"),
+}
+
+func runtimeImage(platform string, mount bool) string {
+	role := "driver"
+	if mount {
+		role = "mount"
+	}
+	if image := *splitImages[role+"-"+platform]; image != "" {
+		return image
+	}
+	if platform == "windows" {
+		return windowsImage
+	}
+	return linuxImage
+}
+
+func validateSplitImages() error {
+	count := 0
+	for role, value := range splitImages {
+		if *value == "" {
+			continue
+		}
+		count++
+		parts := strings.Split(*value, "@sha256:")
+		if len(parts) != 2 || parts[0] == "" || len(parts[1]) != 64 || strings.Trim(parts[1], "0123456789abcdef") != "" {
+			return fmt.Errorf("%s must be an immutable sha256 image reference", role)
+		}
+	}
+	if count != 0 && count != 4 {
+		return fmt.Errorf("provide all four split runtime images, got %d", count)
+	}
+	return nil
+}
 
 const ns = "seaweedfs-csi-qualification"
 const driver = "seaweedfs-csi-driver"
@@ -107,6 +145,10 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 			command = []string{"$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-mount.exe"}
 		}
 	}
+	image = runtimeImage(platform, mount)
+	if platform == "linux" && image != linuxImage {
+		command[0] = strings.Replace(command[0], "/usr/local/bin/", "/", 1)
+	}
 	c := container("plugin", image, command, args...)
 	c.Env = []core.EnvVar{{Name: "NODE_ID", ValueFrom: &core.EnvVarSource{FieldRef: &core.ObjectFieldSelector{FieldPath: "spec.nodeName"}}}}
 	p.Spec.Containers = []core.Container{c}
@@ -136,8 +178,9 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 				prepare = `if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { throw 'prepared candidate WinFsp installation missing' };`
 				name = "require-candidate"
 			}
-			prepare += ` New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`
+			prepare += ` New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null;`
 			p.Spec.InitContainers = []core.Container{container(name, image, ps(prepare))}
+			p.Spec.InitContainers = append(p.Spec.InitContainers, container("test-inputs", windowsImage, ps(`Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`)))
 			nativeInputs := `Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs;`
 			if candidate {
 				nativePath, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256)
@@ -148,7 +191,7 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 				}
 			}
 			nativeInputs += ` $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`
-			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", image, ps(nativeInputs)))
+			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", windowsImage, ps(nativeInputs)))
 		} else {
 			p.Spec.InitContainers = []core.Container{container("directories", image, ps(`New-Item -ItemType Directory -Force '`+root+`\plugins\`+driver+`' | Out-Null`))}
 			p.Spec.Containers = append(p.Spec.Containers, container("registrar", windowsRegistrar, []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
@@ -214,6 +257,10 @@ func objectsForQualification(candidate bool) []any {
 	controller := basePod("controller", "linux")
 	controller.Spec.ServiceAccountName = "csi"
 	controller.Spec.Containers = []core.Container{container("driver", linuxImage, []string{"/usr/local/bin/seaweedfs-csi-driver"}, "--endpoint=unix:///csi/csi.sock", "--filer=192.0.2.10:8888", "--driverName="+driver, "--components=controller", "--attacher=true")}
+	controller.Spec.Containers[0].Image = runtimeImage("linux", false)
+	if controller.Spec.Containers[0].Image != linuxImage {
+		controller.Spec.Containers[0].Command = []string{"/seaweedfs-csi-driver"}
+	}
 	for _, s := range []struct{ name, version string }{{"provisioner", "v3.5.0"}, {"attacher", "v4.3.0"}, {"resizer", "v1.8.0"}} {
 		controller.Spec.Containers = append(controller.Spec.Containers, container(s.name, "registry.k8s.io/sig-storage/csi-"+s.name+":"+s.version, nil, "--csi-address=/csi/csi.sock", "--leader-election", "--leader-election-namespace="+ns))
 	}
@@ -298,6 +345,9 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		t.Fatal("offline fixture media missing", err)
 	}
 	assertFixture(t)
+	if err := validateSplitImages(); err != nil {
+		t.Fatal(err)
+	}
 	run := func(args ...string) []byte {
 		t.Helper()
 		out, err := kubectl(nil, args...)
@@ -349,6 +399,16 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		apply(clientPod(platform))
 	}
 	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=10m")
+	if *splitImages["driver-linux"] != "" {
+		var pods core.PodList
+		if err := json.Unmarshal(run("get", "pods", "-n", ns, "-o", "json"), &pods); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifySplitImageRuntime(pods); err != nil {
+			t.Fatal(err)
+		}
+		t.Log("SPLIT_CSI_RUNTIME_IMAGES_ATTESTED")
+	}
 	// Reject a mismatched matrix/network before the expensive filesystem suite.
 	captureWindowsNetwork(t)
 	checkController := watchCSIController(t)

@@ -169,14 +169,14 @@ func TestCandidateInitializationCannotInstallStockWinFsp(t *testing.T) {
 	*candidateNativeTestSHA256 = strings.Repeat("a", 64)
 	candidate := nodePodForQualification("windows", true, true)
 	stock := nodePodForQualification("windows", true, false)
-	if len(candidate.Spec.InitContainers) != 2 || candidate.Spec.InitContainers[0].Name != "require-candidate" {
+	if len(candidate.Spec.InitContainers) != 3 || candidate.Spec.InitContainers[0].Name != "require-candidate" {
 		t.Fatalf("candidate init is not fail-closed: %+v", candidate.Spec.InitContainers)
 	}
 	candidateScript := decodedPowerShell(t, candidate.Spec.InitContainers[0].Command)
 	if strings.Contains(strings.ToLower(candidateScript), "winfsp.msi") || strings.Contains(candidateScript, "Start-Process") {
 		t.Fatalf("candidate init can replace the prepared WinFsp install: %s", candidateScript)
 	}
-	if len(stock.Spec.InitContainers) != 2 || stock.Spec.InitContainers[0].Name != "install-stock" {
+	if len(stock.Spec.InitContainers) != 3 || stock.Spec.InitContainers[0].Name != "install-stock" {
 		t.Fatalf("stock init changed unexpectedly: %+v", stock.Spec.InitContainers)
 	}
 	stockScript := decodedPowerShell(t, stock.Spec.InitContainers[0].Command)
@@ -190,7 +190,10 @@ func TestCandidateInitializationCannotInstallStockWinFsp(t *testing.T) {
 		if i == 1 {
 			pod = stock
 		}
-		inputs := decodedPowerShell(t, pod.Spec.InitContainers[1].Command)
+		if pod.Spec.InitContainers[1].Name != "test-inputs" || pod.Spec.InitContainers[2].Name != "native-test-inputs" {
+			t.Fatal("test inputs must have explicit ordered initialization")
+		}
+		inputs := decodedPowerShell(t, pod.Spec.InitContainers[2].Command)
 		if !strings.Contains(inputs, "winfsp-x64.dll") {
 			t.Fatalf("%s native inputs missing: %s", name, inputs)
 		}

@@ -30,6 +30,21 @@ export LABCONTAINERS_KUBERNETES_WORKLOAD="$CSI_LAB_ARTIFACTS/kubernetes-workload
 LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256=$(sha256sum "$LABCONTAINERS_KUBERNETES_WORKLOAD" | cut -d ' ' -f 1)
 export LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256
 export LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS="[\"-test.v\",\"-test.run=^TestCSIStockWinFsp$\",\"-test.timeout=35m\",\"-csi-live\",\"-csi-cni=$LABCONTAINERS_KUBERNETES_CNI\"]"
+# Optional production-layout lane: retain the lab images only for test tools.
+# Require a complete digest-pinned set before starting any VM.
+split_count=0
+for role in driver mount; do
+ for platform in linux windows; do
+  key="CSI_${role^^}_${platform^^}_IMAGE"
+  value=${!key:-}
+  if [[ -n "$value" ]]; then
+   [[ "$value" =~ ^[a-zA-Z0-9./:_-]+@sha256:[0-9a-f]{64}$ ]] || { echo "$key must be digest-pinned" >&2; exit 1; }
+   LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS="${LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS%]},\"-csi-$role-$platform-image=$value\"]"
+   split_count=$((split_count+1))
+  fi
+ done
+done
+[[ "$split_count" == 0 || "$split_count" == 4 ]] || { echo 'Provide all four CSI split image references' >&2; exit 1; }
 export LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS=CSI_QUALIFICATION_COMPLETE
 cd "$CALICO_LAB_MODULE"
 go test -v -count=1 -run '^TestLiveK0sWindowsNetwork$' -timeout=90m . 2>&1 | tee "$CSI_LAB_ARTIFACTS/live.log"
