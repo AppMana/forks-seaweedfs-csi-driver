@@ -15,6 +15,7 @@ func verifySplitImageRuntime(pods core.PodList) error {
 		"mount-linux": *splitImages["mount-linux"], "node-linux": *splitImages["driver-linux"],
 		"mount-windows": *splitImages["mount-windows"], "node-windows": *splitImages["driver-windows"],
 		"controller": *splitImages["driver-linux"],
+		"backend":    *splitImages["mount-linux"], "capacity": *splitImages["mount-linux"],
 	}
 	seen := map[string]bool{}
 	for _, pod := range pods.Items {
@@ -26,6 +27,12 @@ func verifySplitImageRuntime(pods core.PodList) error {
 		name := "plugin"
 		if role == "controller" {
 			name = "driver"
+		}
+		if role == "backend" {
+			name = "weed"
+		}
+		if role == "capacity" {
+			name = "volume"
 		}
 		for _, status := range pod.Status.ContainerStatuses {
 			if status.Name != name {
@@ -135,10 +142,16 @@ func TestSplitRuntimeRequiresEveryRunningDigest(t *testing.T) {
 		*value = "example.test/image@" + digest
 	}
 	var pods core.PodList
-	for _, role := range []string{"controller", "mount-linux", "node-linux", "mount-windows", "node-windows"} {
+	for _, role := range []string{"controller", "mount-linux", "node-linux", "mount-windows", "node-windows", "backend", "capacity"} {
 		name := "plugin"
 		if role == "controller" {
 			name = "driver"
+		}
+		if role == "backend" {
+			name = "weed"
+		}
+		if role == "capacity" {
+			name = "volume"
 		}
 		pods.Items = append(pods.Items, core.Pod{ObjectMeta: meta.ObjectMeta{Labels: map[string]string{"app": role}}, Status: core.PodStatus{ContainerStatuses: []core.ContainerStatus{{Name: name, Ready: true, ImageID: "example.test/image@" + digest, State: core.ContainerState{Running: &core.ContainerStateRunning{}}}}}})
 	}
@@ -146,6 +159,7 @@ func TestSplitRuntimeRequiresEveryRunningDigest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, corrupt := range []func(*core.PodList){
+		func(p *core.PodList) { p.Items = p.Items[:5] },
 		func(p *core.PodList) { p.Items = p.Items[:4] },
 		func(p *core.PodList) {
 			p.Items[0].Status.ContainerStatuses[0].ImageID = "example.test/image@sha256:" + strings.Repeat("b", 64)

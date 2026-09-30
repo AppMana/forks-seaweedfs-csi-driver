@@ -237,7 +237,7 @@ func objectsForQualification(candidate bool) []any {
 	o = append(o, storage.CSIDriver{TypeMeta: meta.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "CSIDriver"}, ObjectMeta: meta.ObjectMeta{Name: driver}, Spec: storage.CSIDriverSpec{AttachRequired: ptr(true), PodInfoOnMount: ptr(true), VolumeLifecycleModes: []storage.VolumeLifecycleMode{storage.VolumeLifecyclePersistent}}}, storage.StorageClass{TypeMeta: meta.TypeMeta{APIVersion: "storage.k8s.io/v1", Kind: "StorageClass"}, ObjectMeta: meta.ObjectMeta{Name: ns}, Provisioner: driver, AllowVolumeExpansion: ptr(true)})
 	backend := basePod("backend", "linux")
 	backend.Spec.HostNetwork = true
-	backend.Spec.Containers = []core.Container{container("weed", linuxImage, []string{"/usr/bin/weed"}, "server", "-ip=192.0.2.10", "-dir=/data", "-filer", "-master.volumeSizeLimitMB=64", "-volume.max=5")}
+	backend.Spec.Containers = []core.Container{container("weed", runtimeImage("linux", true), []string{"/usr/bin/weed"}, "server", "-ip=192.0.2.10", "-dir=/data", "-filer", "-master.volumeSizeLimitMB=64", "-volume.max=5")}
 	// Match the standalone native Windows suite's UTF-8 byte budget. Windows
 	// still enforces 255 UTF-16 units; Linux retains its 255-byte mount limit.
 	// Set this globally on the isolated filer: rename also uses that limit.
@@ -250,7 +250,7 @@ func objectsForQualification(candidate bool) []any {
 	// additional slots instead of confusing slot exhaustion with disk capacity.
 	capacity := basePod("capacity", "linux")
 	capacity.Spec.HostNetwork = true
-	capacity.Spec.Containers = []core.Container{container("volume", linuxImage, []string{"/usr/bin/weed"}, "volume", "-ip=192.0.2.10", "-port=8081", "-master=192.0.2.10:9333", "-dir=/data", "-max=32")}
+	capacity.Spec.Containers = []core.Container{container("volume", runtimeImage("linux", true), []string{"/usr/bin/weed"}, "volume", "-ip=192.0.2.10", "-port=8081", "-master=192.0.2.10:9333", "-dir=/data", "-max=32")}
 	capacity.Spec.Volumes = []core.Volume{{Name: "data", VolumeSource: core.VolumeSource{EmptyDir: &core.EmptyDirVolumeSource{}}}}
 	capacity.Spec.Containers[0].VolumeMounts = []core.VolumeMount{{Name: "data", MountPath: "/data"}}
 	o = append(o, capacity)
