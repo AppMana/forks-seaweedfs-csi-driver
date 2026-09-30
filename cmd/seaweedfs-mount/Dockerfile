@@ -5,6 +5,7 @@ ARG SEAWEEDFS_COMMIT=8ecd3e03f9fb7b4361cce12cd439520bfef00ca1
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e
+ARG PAYLOAD_STAGE=builder
 
 FROM golang:1.26.0-alpine AS builder
 
@@ -34,11 +35,23 @@ COPY . .
 
 RUN go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount/main.go && go clean -cache -modcache
 
+# Optional promotion path: package already-qualified bytes without rebuilding.
+# Build context contains weed and seaweedfs-mount; both digests are mandatory.
+FROM alpine AS prebuilt
+ARG WEED_SHA256
+ARG MOUNT_SHA256
+COPY weed /go/bin/weed
+COPY seaweedfs-mount /seaweedfs-mount
+RUN test -n "$WEED_SHA256" && test -n "$MOUNT_SHA256" \
+    && echo "$WEED_SHA256  /go/bin/weed" | sha256sum -c - \
+    && echo "$MOUNT_SHA256  /seaweedfs-mount" | sha256sum -c -
+
+FROM ${PAYLOAD_STAGE} AS payload
 FROM alpine AS final
 RUN apk add fuse
 LABEL author="Chris Lu"
-COPY --from=builder /go/bin/weed /usr/bin/
-COPY --from=builder /seaweedfs-mount /
+COPY --from=payload /go/bin/weed /usr/bin/
+COPY --from=payload /seaweedfs-mount /
 
 RUN chmod +x /seaweedfs-mount
 ENTRYPOINT ["/seaweedfs-mount"]

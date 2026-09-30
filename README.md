@@ -35,8 +35,10 @@ Do not use a DaemonSet image rollout as a driver-upgrade mechanism.
 contains the candidate fixes and isolated native-VM qualification harness.
 Its test-signed outputs are not production MSI replacements. A fork rollout
 requires a production-signed package, explicit MSI URL/checksum pins, and a
-drained-node installation/upgrade/rollback test with the actual network/UNC
-mount mode and pod workloads. DLL-only substitution cannot deploy a kernel
+real-VM installation/restart test with the actual CSI network/UNC mount mode
+and mixed-OS pod workloads. This qualification belongs in the isolated
+Labcontainers Kubernetes harness, not on drained production nodes.
+DLL-only substitution cannot deploy a kernel
 fix. Keep test signing disabled on cluster hosts.
 
 **Large volumes:** the bundled `weed.exe`/`weed` binaries are the large-disk
@@ -49,6 +51,26 @@ Images (multi-OS manifest lists, `linux/amd64` + `windows/amd64` ltsc2022):
 ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.5
 ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
 ```
+
+To package already-tested executables without rebuilding them, run on the
+Linux lab host:
+
+```sh
+python3 test/kubernetes_lab/package_images.py \
+  --inputs /absolute/path/to/qualified-binaries \
+  --sha256-file /absolute/path/to/inputs.sha256 \
+  --results-root /absolute/path/to/retained-results --builder lin-multi
+```
+
+The checksum file uses `sha256sum` format with plain filenames. Required
+inputs are `weed[.exe]`, `seaweedfs-mount[.exe]`,
+`seaweedfs-csi-driver[.exe]`, and `winfsp.msi`. The existing Dockerfiles retain
+their default source-build path; `PAYLOAD_STAGE=prebuilt` requires matching
+executable checksum build arguments. The command builds four images in
+parallel, checks the packaged bytes/platform/entrypoint, smoke-tests Linux
+startup, and retains OCI archives, digests and logs. It never pushes images,
+starts VMs or upgrades a host WinFsp installation. These packaging checks do
+not substitute for the real-VM workload evidence or production driver signing.
 
 ## Deploying the Windows DaemonSets
 
