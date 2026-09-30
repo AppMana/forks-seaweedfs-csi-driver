@@ -51,11 +51,20 @@ if [[ -n "${CSI_CANDIDATE_BUNDLE:-}" ]]; then
  LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS=$(jq -ce '.args' <<<"$candidate_spec")
  LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS=$(jq -er '.success' <<<"$candidate_spec")
 fi
+fixture_timeout=90m
+if [[ -n "${LABCONTAINERS_KUBERNETES_CRASH_VERIFY:-}" ]]; then
+ [[ "$LABCONTAINERS_KUBERNETES_CRASH_VERIFY" == 1 && -n "${CSI_CANDIDATE_BUNDLE:-}" ]] || { echo 'Crash readback requires explicit 1 and the candidate bundle' >&2; exit 1; }
+ LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS=$(jq -ce '. + ["-csi-emit-crash-plan"]' <<<"$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS")
+ fixture_timeout=130m
+fi
 printf '%s\n' "$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS" > "$CSI_LAB_ARTIFACTS/launched-workload-args.json"
 (cd "$csi_repo" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c -o "$LABCONTAINERS_KUBERNETES_WORKLOAD" ./test/kubernetes_lab)
 LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256=$(sha256sum "$LABCONTAINERS_KUBERNETES_WORKLOAD" | cut -d ' ' -f 1)
 export LABCONTAINERS_KUBERNETES_WORKLOAD_SHA256
 cd "$CALICO_LAB_MODULE"
-go test -v -count=1 -run '^TestLiveK0sWindowsNetwork$' -timeout=90m . 2>&1 | tee "$CSI_LAB_ARTIFACTS/live.log"
+go test -v -count=1 -run '^TestLiveK0sWindowsNetwork$' -timeout="$fixture_timeout" . 2>&1 | tee "$CSI_LAB_ARTIFACTS/live.log"
 # go test returns success on skipped tests; require evidence of the consumer.
 grep -Fq "$LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS" "$CSI_LAB_ARTIFACTS/live.log"
+if [[ "${LABCONTAINERS_KUBERNETES_CRASH_VERIFY:-}" == 1 ]]; then
+ grep -Fxq 'RETAINED_KUBERNETES_CRASH_CONSUMER_COMPLETE' "$CSI_LAB_ARTIFACTS/live.log"
+fi

@@ -31,6 +31,7 @@ var nativeTestExecutable = flag.String("csi-native-test-executable", `C:\tools\w
 var candidateManifestPath = flag.String("csi-candidate-manifest", "", "explicit lab-only WinFsp candidate build manifest")
 var candidateManifestSHA256 = flag.String("csi-candidate-manifest-sha256", "", "immutable SHA-256 of the candidate build manifest")
 var candidateNativeTestSHA256 = flag.String("csi-candidate-native-test-sha256", "", "immutable SHA-256 of the separately staged candidate native test executable")
+var emitCrashPlan = flag.Bool("csi-emit-crash-plan", false, "publish original-dataset readback continuation for the host fixture's opt-in crash gate")
 var splitImages = map[string]*string{
 	"driver-linux":   flag.String("csi-driver-linux-image", "", "digest-pinned final Linux driver image; provide all four split images"),
 	"mount-linux":    flag.String("csi-mount-linux-image", "", "digest-pinned final Linux mount image"),
@@ -481,6 +482,13 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	attest("post-recovery")
 	checkController()
 	if candidate != nil {
+		if *emitCrashPlan {
+			plan, err := existingPersistencePlan(os.Args[1:], token, csiFilerRoot(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fmt.Println(plan)
+		}
 		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")
 	} else {
 		fmt.Println("CSI_QUALIFICATION_COMPLETE")
