@@ -348,6 +348,12 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	if err := validateSplitImages(); err != nil {
 		t.Fatal(err)
 	}
+	if *candidateMSISHA256 != "" {
+		if candidate == nil {
+			t.Fatal("MSI bootstrap requires the candidate lane")
+		}
+		bootstrapCandidateMSI(t, *candidate)
+	}
 	run := func(args ...string) []byte {
 		t.Helper()
 		out, err := kubectl(nil, args...)
