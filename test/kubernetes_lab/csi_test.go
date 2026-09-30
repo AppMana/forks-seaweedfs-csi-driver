@@ -283,7 +283,19 @@ func kubectlWithTimeout(timeout time.Duration, input []byte, args ...string) ([]
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/usr/local/bin/k0s", append([]string{"kubectl"}, args...)...)
 	cmd.Stdin = bytes.NewReader(input)
-	return cmd.CombinedOutput()
+	return kubectlOutput(cmd)
+}
+
+func kubectlOutput(cmd *exec.Cmd) ([]byte, error) {
+	// PowerShell writes CLIXML diagnostics to stderr without respecting stdout
+	// line boundaries. Never merge that stream into JSON or completion evidence.
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if err != nil {
+		return stdout.Bytes(), fmt.Errorf("%w: %s", err, stderr.String())
+	}
+	return stdout.Bytes(), nil
 }
 func TestManifestContracts(t *testing.T) {
 	for _, platform := range []string{"linux", "windows"} {
