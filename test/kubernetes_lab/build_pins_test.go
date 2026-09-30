@@ -19,19 +19,29 @@ func TestMountBuildPinsAgree(t *testing.T) {
 		return string(b)
 	}
 	workflow := read(".github/workflows/build-images.yml")
-	match := regexp.MustCompile(`(?m)^  SEAWEEDFS_COMMIT: ([0-9a-f]{40})$`).FindStringSubmatch(workflow)
-	if len(match) != 2 {
-		t.Fatal("workflow requires one full source revision")
+	pins := map[string]string{
+		"SEAWEEDFS_COMMIT":         "dd2b9ef98d38488121808765148306c365e341b1",
+		"SEAWEEDFS_WINDOWS_COMMIT": "ce25e03a121b7b975df26a2c485e77f98ea139ca",
 	}
-	if match[1] != "8ecd3e03f9fb7b4361cce12cd439520bfef00ca1" {
-		t.Fatal("workflow does not select the memory-fix qualification source")
+	for key, want := range pins {
+		match := regexp.MustCompile(`(?m)^  ` + key + `: ([0-9a-f]{40})$`).FindStringSubmatch(workflow)
+		if len(match) != 2 || match[1] != want {
+			t.Errorf("workflow %s must select source %s", key, want)
+		}
+	}
+	if !strings.Contains(workflow, `--build-arg SEAWEEDFS_COMMIT="$SEAWEEDFS_WINDOWS_COMMIT"`) {
+		t.Error("Windows source pin is not passed to the build")
 	}
 	for _, file := range []string{"Dockerfile", "Dockerfile.Windows", "Dockerfile.dev"} {
 		t.Run(file, func(t *testing.T) {
 			source := read("cmd/seaweedfs-mount/" + file)
+			pin := pins["SEAWEEDFS_COMMIT"]
+			if file == "Dockerfile.Windows" {
+				pin = pins["SEAWEEDFS_WINDOWS_COMMIT"]
+			}
 			for _, required := range []string{
 				"golang:1.26.0",
-				"ARG SEAWEEDFS_COMMIT=" + match[1],
+				"ARG SEAWEEDFS_COMMIT=" + pin,
 				"ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs",
 				"ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e",
 				"git checkout ${GO_FUSE_COMMIT}",
