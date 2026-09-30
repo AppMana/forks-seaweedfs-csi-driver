@@ -1,0 +1,36 @@
+name: CSI lab contracts (no publication)
+
+on:
+  push:
+    branches: ['wip/**']
+    paths: ['test/kubernetes_lab/**', 'pkg/**', 'cmd/**', 'go.mod', 'go.sum', '.github/workflows/lab-contracts.yml']
+  pull_request:
+    paths: ['test/kubernetes_lab/**', 'pkg/**', 'cmd/**', 'go.mod', 'go.sum', '.github/workflows/lab-contracts.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Require real script and offline-media tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xorriso genisoimage
+          pwsh -NoProfile -Command '$PSVersionTable.PSVersion'
+          openssl version
+      - name: Build both target operating systems
+        run: |
+          go build ./...
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+      - name: Go race contracts and unit tests
+        run: go test -race -count=1 ./...
+      - name: Offline media and package contracts
+        run: python3 -m unittest discover -s test/kubernetes_lab -p 'test_*.py' -v

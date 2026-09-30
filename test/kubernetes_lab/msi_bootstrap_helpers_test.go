@@ -1,5 +1,7 @@
 package kubernetes_lab
 
+// The MSI bootstrap is only linked into the opt-in qualification executable.
+
 import (
 	"encoding/hex"
 	"encoding/json"

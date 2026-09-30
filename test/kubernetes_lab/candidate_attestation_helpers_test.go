@@ -1,5 +1,7 @@
 package kubernetes_lab
 
+// These helpers belong to the test harness, not a separately buildable package.
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
