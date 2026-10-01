@@ -106,25 +106,41 @@ def inspect_oci(path, platform, expected, entrypoint):
                     entrypoint=config['config']['Entrypoint'], platform=platform)
 
 
+def required_inputs(components, winfsp_dll):
+    if winfsp_dll and 'mount' not in components:
+        raise ValueError('--winfsp-dll requires the mount component')
+    required = [f'seaweedfs-{component}{suffix}' for component in components
+                for suffix in ('', '.exe')]
+    if 'mount' in components:
+        required += ['weed', 'weed.exe', 'winfsp.msi']
+    if winfsp_dll:
+        required.append('winfsp-x64.dll')
+    return required
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--inputs', type=Path, required=True)
     parser.add_argument('--sha256-file', type=Path, required=True)
     parser.add_argument('--results-root', type=Path, required=True)
     parser.add_argument('--builder', required=True)
+    parser.add_argument('--component', action='append', choices=('csi-driver', 'mount'),
+                        help='package only selected components; default is both')
     parser.add_argument('--winfsp-dll', action='store_true',
                         help='package pinned app-local winfsp-x64.dll; retain the stock MSI/driver')
     args = parser.parse_args()
+    components = list(dict.fromkeys(args.component or ['csi-driver', 'mount']))
+    try:
+        required = required_inputs(components, args.winfsp_dll)
+    except ValueError as error:
+        parser.error(str(error))
     pins = {}
     for line in args.sha256_file.read_text().splitlines():
         digest, name = line.split(maxsplit=1)
         if not re.fullmatch(r'[0-9a-f]{64}', digest) or not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or name in pins:
             parser.error('invalid or duplicate pinned filename')
         pins[name] = digest
-    required = ['weed', 'weed.exe', 'seaweedfs-mount', 'seaweedfs-mount.exe',
-                'seaweedfs-csi-driver', 'seaweedfs-csi-driver.exe', 'winfsp.msi']
     if args.winfsp_dll:
-        required.append('winfsp-x64.dll')
         if pins.get('winfsp.msi') != '073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a':
             parser.error('DLL-only packaging requires the pinned official WinFsp MSI')
     for name in required:
@@ -192,7 +208,7 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         pending = [pool.submit(build, platform, component)
-                   for platform in ('linux', 'windows') for component in ('csi-driver', 'mount')]
+                   for platform in ('linux', 'windows') for component in components]
         results = dict(job.result() for job in pending)
     passed = all(result['status'] == 'passed' for result in results.values())
     (output / 'manifest.json').write_text(json.dumps(dict(

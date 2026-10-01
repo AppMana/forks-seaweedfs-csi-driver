@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 from package_images import inspect_oci
+import package_images
 
 
 def tar_bytes(files):
@@ -22,6 +23,12 @@ def tar_bytes(files):
 
 
 class PackageImages(unittest.TestCase):
+    def test_driver_only_does_not_require_or_rebuild_mount_payloads(self):
+        self.assertEqual(package_images.required_inputs(['csi-driver'], False),
+                         ['seaweedfs-csi-driver', 'seaweedfs-csi-driver.exe'])
+        with self.assertRaises(ValueError):
+            package_images.required_inputs(['csi-driver'], True)
+
     def test_dll_only_rejects_nonstock_installer_before_build(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

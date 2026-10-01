@@ -74,6 +74,12 @@ startup, and retains OCI archives, digests and logs. It never pushes images,
 starts VMs or upgrades a host WinFsp installation. These packaging checks do
 not substitute for the real-VM workload evidence or production driver signing.
 
+For a driver-only fix, add `--component csi-driver`: only the Linux/Windows
+driver executables and their checksums are required, and only those two images
+are built. Reuse the already-qualified mount archives unchanged. The selector
+can be repeated; its default remains both components. `--winfsp-dll` requires
+the mount component.
+
 For the DLL-only variant, add `--winfsp-dll` and include `winfsp-x64.dll` with
 its checksum in the input manifest. This mode requires the pinned official
 MSI. Verify the running mount process loads the image-local DLL and that the
