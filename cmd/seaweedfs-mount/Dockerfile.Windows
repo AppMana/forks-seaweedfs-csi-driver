@@ -4,7 +4,7 @@
 #     -f cmd/seaweedfs-mount/Dockerfile.Windows .
 
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=801c4af40cc9a7c060db729386553ce283c8ef4a
+ARG SEAWEEDFS_COMMIT=4cc1474e2b287245f53c9fa5e2c94822e09ce5a7
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e
