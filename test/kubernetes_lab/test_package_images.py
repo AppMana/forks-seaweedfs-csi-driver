@@ -5,6 +5,8 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+import subprocess
+import sys
 
 from package_images import inspect_oci
 
@@ -20,6 +22,19 @@ def tar_bytes(files):
 
 
 class PackageImages(unittest.TestCase):
+    def test_dll_only_rejects_nonstock_installer_before_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pins = root / 'pins'
+            pins.write_text('a' * 64 + ' winfsp.msi\n')
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name('package_images.py')),
+                                     '--inputs', str(root), '--sha256-file', str(pins),
+                                     '--results-root', str(root / 'results'), '--builder', 'unused',
+                                     '--winfsp-dll'], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('requires the pinned official WinFsp MSI', result.stderr)
+            self.assertFalse((root / 'results').exists())
+
     def test_dll_only_target_preserves_stock_driver_installer(self):
         dockerfile = (Path(__file__).resolve().parents[2] /
                       'cmd/seaweedfs-mount/Dockerfile.Windows').read_text()

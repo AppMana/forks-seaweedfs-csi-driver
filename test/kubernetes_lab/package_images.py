@@ -112,6 +112,8 @@ def main():
     parser.add_argument('--sha256-file', type=Path, required=True)
     parser.add_argument('--results-root', type=Path, required=True)
     parser.add_argument('--builder', required=True)
+    parser.add_argument('--winfsp-dll', action='store_true',
+                        help='package pinned app-local winfsp-x64.dll; retain the stock MSI/driver')
     args = parser.parse_args()
     pins = {}
     for line in args.sha256_file.read_text().splitlines():
@@ -121,6 +123,10 @@ def main():
         pins[name] = digest
     required = ['weed', 'weed.exe', 'seaweedfs-mount', 'seaweedfs-mount.exe',
                 'seaweedfs-csi-driver', 'seaweedfs-csi-driver.exe', 'winfsp.msi']
+    if args.winfsp_dll:
+        required.append('winfsp-x64.dll')
+        if pins.get('winfsp.msi') != '073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a':
+            parser.error('DLL-only packaging requires the pinned official WinFsp MSI')
     for name in required:
         if name not in pins or sha(args.inputs / name) != pins[name]:
             parser.error('missing or mismatched input: ' + name)
@@ -151,6 +157,10 @@ def main():
                    '--output', 'type=oci,dest=' + str(archive),
                    '-t', 'appmana/seaweedfs-' + component + ':' + output.name.lower() + '-' + platform,
                    '-f', str(dockerfile)]
+        if args.winfsp_dll and windows and component == 'mount':
+            expected['winfsp-x64.dll'] = pins['winfsp-x64.dll']
+            build_args['WINFSP_DLL_SHA256'] = pins['winfsp-x64.dll']
+            command += ['--target', 'dll-only']
         for key, value in build_args.items():
             command += ['--build-arg', key + '=' + value]
         command += [str(args.inputs.resolve())]
