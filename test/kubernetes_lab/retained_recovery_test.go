@@ -54,7 +54,10 @@ func TestCSIRetainedMixedRecovery(t *testing.T) {
 		}
 	}
 	checkController := watchCSIController(t)
-	script, marker := stockAttestation, "STOCK_WINFSP_ATTESTED"
+	script, marker, attestationErr := nonCandidateAttestation()
+	if attestationErr != nil {
+		t.Fatal(attestationErr)
+	}
 	if *candidateManifestPath != "" || *candidateManifestSHA256 != "" {
 		manifest, err := loadCandidateManifest(*candidateManifestPath, *candidateManifestSHA256)
 		if err != nil {

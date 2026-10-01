@@ -55,11 +55,7 @@ func TestCSIExistingPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := loadCandidateManifest(*candidateManifestPath, *candidateManifestSHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	native, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256)
+	attestation, marker, err := persistenceAttestation()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,9 +75,9 @@ func TestCSIExistingPersistence(t *testing.T) {
 	run("wait", "-n", ns, "pod/"+clientName("linux"), "pod/"+clientName("windows"), "--for=condition=Ready", "--timeout=5m")
 	captureWindowsNetwork(t)
 	checkController := watchCSIController(t)
-	out := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(candidateAttestation(manifest, native, *candidateNativeTestSHA256))...)...)
-	if !containsExactLine(string(out), "CANDIDATE_WINFSP_ATTESTED:"+manifest.DriverSourceRevision+":"+manifest.DriverSourceArchiveSHA256) {
-		t.Fatal("candidate attestation missing")
+	out := run(append([]string{"exec", "-n", ns, "daemonset/mount-windows", "-c", "plugin", "--"}, ps(attestation)...)...)
+	if !containsExactLine(string(out), marker) {
+		t.Fatal("persistence driver attestation missing")
 	}
 	for _, platform := range []string{"linux", "windows"} {
 		binary, root := "/usr/local/bin/mixed-linux", l+"/mixed"

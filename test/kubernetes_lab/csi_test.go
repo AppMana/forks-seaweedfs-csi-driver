@@ -183,7 +183,7 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 			p.Spec.InitContainers = []core.Container{container(name, image, ps(prepare))}
 			p.Spec.InitContainers = append(p.Spec.InitContainers, container("test-inputs", windowsImage, ps(`Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\mixed-windows.exe" C:\LabInputs; Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\Git-2.51.0-64-bit.exe" C:\LabInputs`)))
 			nativeInputs := `Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp-csi.test.exe" C:\LabInputs;`
-			if candidate {
+			if candidate || *dllOnlySHA256 != "" {
 				nativePath, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256)
 				if err != nil {
 					nativeInputs = `throw ` + psLiteral(err.Error()) + `;`
@@ -191,8 +191,16 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 					nativeInputs = `$native=` + psLiteral(nativePath) + `; if(!(Test-Path -LiteralPath $native)){throw 'prepared candidate native test executable missing'}; if((Get-FileHash -Algorithm SHA256 -LiteralPath $native).Hash -ine ` + psLiteral(*candidateNativeTestSHA256) + `){throw 'prepared candidate native test executable hash mismatch'};`
 				}
 			}
-			nativeInputs += ` $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`
-			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", windowsImage, ps(nativeInputs)))
+			nativeImage := windowsImage
+			if *dllOnlySHA256 != "" {
+				// Test executable is separately hash-attested; load the same
+				// app-local DLL as the mount, not the host installation's DLL.
+				nativeImage = image
+				nativeInputs += `; $dll=Join-Path $env:CONTAINER_SANDBOX_MOUNT_POINT 'winfsp-x64.dll'; if((Get-FileHash $dll -Algorithm SHA256).Hash -ine ` + psLiteral(*dllOnlySHA256) + `){throw 'app-local DLL hash mismatch'}; Copy-Item $dll C:\LabInputs\winfsp-x64.dll`
+			} else {
+				nativeInputs += ` $root=(Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\WinFsp').InstallDir; if(!$root){throw 'missing WinFsp installation'}; Copy-Item (Join-Path $root 'bin\winfsp-x64.dll') C:\LabInputs`
+			}
+			p.Spec.InitContainers = append(p.Spec.InitContainers, container("native-test-inputs", nativeImage, ps(nativeInputs)))
 		} else {
 			p.Spec.InitContainers = []core.Container{container("directories", image, ps(`New-Item -ItemType Directory -Force '`+root+`\plugins\`+driver+`' | Out-Null`))}
 			p.Spec.Containers = append(p.Spec.Containers, container("registrar", windowsRegistrar, []string{"csi-node-driver-registrar.exe"}, "--csi-address="+endpoint, "--kubelet-registration-path="+strings.TrimPrefix(endpoint, "unix://"), "--plugin-registration-path="+root+`\plugins_registry\`, "--v=2"))
@@ -358,6 +366,9 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		t.Fatal("offline fixture media missing", err)
 	}
 	assertFixture(t)
+	if _, _, err := nonCandidateAttestation(); err != nil {
+		t.Fatal(err)
+	}
 	if err := validateSplitImages(); err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +447,10 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	testLinuxRoot := "/data/qualification-" + token
 	testWindowsRoot := `C:\data\qualification-` + token
 	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
-	attestation, marker := stockAttestation, "STOCK_WINFSP_ATTESTED"
+	attestation, marker, attestationErr := nonCandidateAttestation()
+	if attestationErr != nil {
+		t.Fatal(attestationErr)
+	}
 	if candidate != nil {
 		nativePath, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256)
 		if err != nil {
