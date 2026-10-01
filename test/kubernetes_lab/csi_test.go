@@ -467,6 +467,30 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		}
 	}
 	attest("pre-workload")
+	runCSIGitLFS(t, testWindowsRoot)
+	nativeRoot := testWindowsRoot + `\native`
+	nativeFilerRoot := path.Join(csiFilerRoot(t), "qualification-"+token, "native")
+	runCSINative(t, nativeRoot, nativeFilerRoot, "")
+	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
+	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
+	attest("post-recovery")
+	checkController()
+	if *emitCrashPlan {
+		plan, err := existingPersistencePlan(os.Args[1:], token, csiFilerRoot(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println(plan)
+	}
+	if candidate != nil {
+		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")
+	} else {
+		fmt.Println("CSI_QUALIFICATION_COMPLETE")
+	}
+}
+
+func runCSIGitLFS(t *testing.T, testWindowsRoot string) {
+	t.Helper()
 	// Execute the existing regression function, not its standalone mount bootstrap.
 	// Parsing the AST selects exactly the two named functions without dot-sourcing
 	// the script (which would create a second mount and bypass Kubernetes CSI).
@@ -487,25 +511,6 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		if !strings.Contains(string(lfsOutput), marker) {
 			t.Fatalf("missing LFS evidence: %s", marker)
 		}
-	}
-	nativeRoot := testWindowsRoot + `\native`
-	nativeFilerRoot := path.Join(csiFilerRoot(t), "qualification-"+token, "native")
-	runCSINative(t, nativeRoot, nativeFilerRoot, "")
-	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
-	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
-	attest("post-recovery")
-	checkController()
-	if *emitCrashPlan {
-		plan, err := existingPersistencePlan(os.Args[1:], token, csiFilerRoot(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		fmt.Println(plan)
-	}
-	if candidate != nil {
-		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")
-	} else {
-		fmt.Println("CSI_QUALIFICATION_COMPLETE")
 	}
 }
 
