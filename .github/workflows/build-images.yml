@@ -18,7 +18,7 @@ env:
   # Windows receives its cache/namespace fixes. Keep Dockerfile defaults and the build-pin
   # contract aligned. Source qualification does not qualify rebuilt image bytes.
   SEAWEEDFS_COMMIT: dd2b9ef98d38488121808765148306c365e341b1
-  SEAWEEDFS_WINDOWS_COMMIT: ce25e03a121b7b975df26a2c485e77f98ea139ca
+  SEAWEEDFS_WINDOWS_COMMIT: 801c4af40cc9a7c060db729386553ce283c8ef4a
 
 jobs:
   metadata:
