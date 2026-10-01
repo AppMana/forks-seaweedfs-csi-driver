@@ -178,6 +178,67 @@ func TestHealthMonitorDetachesReconstructedDeadMount(t *testing.T) {
 	}
 }
 
+// A restarted mount manager has no record of mounts created by its predecessor.
+// Its idempotent Unmount returns nil, but the dead FUSE kernel mount remains.
+// Model that independent state explicitly: directory cleanup is not unmount.
+func TestHealthMonitorDetachesMountForgottenByRestartedManager(t *testing.T) {
+	state := newFakeMountState()
+	ns := newNodeServerWithFakes(t, state)
+	path := filepath.Join(t.TempDir(), "staging")
+	vol, err := ns.stageNewVolume("forgotten", path, map[string]string{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vol.volContext = map[string]string{}
+	ns.volumes.Store("forgotten", vol)
+	state.healthy.Store(false)
+	kernelMounted := true
+	ns.detachStagingFn = func(string) error { kernelMounted = false; return nil }
+	ns.cleanupStagingFn = func(string) error {
+		if kernelMounted {
+			return errors.New("dead kernel mount remains after manager forgot it")
+		}
+		return nil
+	}
+	ns.recoverVolume("forgotten")
+	if kernelMounted || state.stageCalls != 2 {
+		t.Fatalf("manager success left dead mount: kernelMounted=%v stageCalls=%d", kernelMounted, state.stageCalls)
+	}
+}
+
+// The manager RPC must not authorize detaching a mount whose health changed.
+func TestHealthMonitorDoesNotDetachRecoveredOrSlowMountAfterManagerRPC(t *testing.T) {
+	for _, slow := range []bool{false, true} {
+		t.Run(map[bool]string{false: "healthy", true: "slow"}[slow], func(t *testing.T) {
+			state := newFakeMountState()
+			ns := newNodeServerWithFakes(t, state)
+			ns.healthCheckTimeout = 10 * time.Millisecond
+			vol, err := ns.stageNewVolume("vol", filepath.Join(t.TempDir(), "stage"), map[string]string{}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			vol.volContext = map[string]string{}
+			ns.volumes.Store("vol", vol)
+			var probes atomic.Int32
+			release := make(chan struct{})
+			defer close(release)
+			ns.isHealthyFn = func(string) bool {
+				if probes.Add(1) == 1 {
+					return false
+				}
+				if slow {
+					<-release
+				}
+				return true
+			}
+			ns.recoverVolume("vol")
+			if state.detachCalls != 0 || state.cleanupCalls != 0 || state.stageCalls != 1 {
+				t.Fatalf("mount that recovered/became slow was modified: detach=%d cleanup=%d stage=%d", state.detachCalls, state.cleanupCalls, state.stageCalls)
+			}
+		})
+	}
+}
+
 // TestHealthMonitorRecoversStaleMount is the integration test for
 // seaweedfs/seaweedfs-csi-driver#253. It walks through the full CSI
 // lifecycle — stage → publish → simulated FUSE crash → recovery — and

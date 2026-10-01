@@ -398,17 +398,20 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 			glog.Errorf("health monitor: unmount via mount manager failed for volume %s, aborting recovery: %v", volumeID, err)
 			return
 		}
-	} else {
-		// Volumes reconstructed after a CSI or mount-daemon restart do not
-		// have the manager handle that owned the old weed process. At this
-		// point the mount has passed the consecutive-death threshold and a
-		// locked health re-check, so detach the dead kernel mount directly.
-		// Linux uses MNT_DETACH to release an ENOTCONN FUSE mount even while
-		// stale references exist in container mount namespaces.
-		if err := ns.detachStagingFn(stagingPath); err != nil {
-			glog.Errorf("health monitor: detach reconstructed staging mount failed for volume %s, aborting recovery: %v", volumeID, err)
-			return
-		}
+	}
+
+	// A restarted manager can report successful idempotent Unmount while
+	// having no record of the predecessor's dead kernel mount. This also
+	// happens with a non-nil unmounter retained by the still-running CSI
+	// plugin. Re-check after the RPC, then detach the confirmed-dead artifact
+	// in either case. Never detach a mount that became healthy or merely slow.
+	if r := ns.checkHealth(stagingPath); r != healthDead {
+		glog.Infof("health monitor: staging mount for volume %s no longer confirmed dead after manager unmount (state=%s), aborting recovery", volumeID, r)
+		return
+	}
+	if err := ns.detachStagingFn(stagingPath); err != nil {
+		glog.Errorf("health monitor: detach dead staging mount failed for volume %s, aborting recovery: %v", volumeID, err)
+		return
 	}
 
 	// Refuse to enter cleanupStagingFn (which RemoveAlls the staging path)
