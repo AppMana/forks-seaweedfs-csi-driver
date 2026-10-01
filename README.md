@@ -86,6 +86,25 @@ MSI. Verify the running mount process loads the image-local DLL and that the
 host SYS remains Microsoft-signed with test signing disabled. Absolute-symlink
 fixes that require the fork's kernel driver are not delivered by this option.
 
+For fresh mixed-OS recovery qualification, the existing
+`test/kubernetes_lab/run.sh` accepts `CSI_QUALIFICATION_MODE=recovery` together
+with all four digest-pinned `CSI_DRIVER_{LINUX,WINDOWS}_IMAGE` and
+`CSI_MOUNT_{LINUX,WINDOWS}_IMAGE` inputs. It retains Git LFS, native persistence,
+mixed I/O, remount and Windows reboot checks, but emits the distinct
+`CSI_RECOVERY_QUALIFICATION_COMPLETE` marker: it is not a full native
+conformance pass. The default `full` mode still runs the full native suite.
+`LABCONTAINERS_KUBERNETES_CRASH_VERIFY=1` additionally verifies the original
+dataset around VM power loss with these image pins, without a kernel-candidate
+MSI requirement.
+
+For DLL-only qualification, set both `CSI_WINFSP_DLL_SHA256` and
+`CSI_NATIVE_TEST_SHA256`. Put the matching native executable at
+`/winfsp-csi-candidate.test.exe` on the hash-pinned qualification ISO. A fresh
+fixture copies it to the host tools share only after verifying its hash; a
+retained mismatched executable is rejected, not replaced. The running stock
+SYS signature/hash and disabled test-signing policy remain mandatory. Do not
+combine these settings with `CSI_CANDIDATE_BUNDLE` (the lab kernel-driver lane).
+
 The build workflow publishes only
 `candidate-<source-sha>-<run-id>-<run-attempt>` tags. These are source-build
 candidates, not qualified releases or the prebuilt DLL-only images. For release,

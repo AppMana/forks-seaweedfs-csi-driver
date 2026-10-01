@@ -184,3 +184,69 @@ esac`,
 		t.Fatalf("mismatched daemon reached live launch: exit=%v marker=%v output=%s", runErr, err, out)
 	}
 }
+
+func TestLauncherRecoveryAndDLLPins(t *testing.T) {
+	for _, tc := range []struct {
+		name, mode, dll, native, candidate string
+		allowed                            bool
+	}{
+		{"recovery DLL", "recovery", strings.Repeat("a", 64), strings.Repeat("b", 64), "", true},
+		{"stock recovery", "recovery", "", "", "", true},
+		{"partial DLL pins", "recovery", strings.Repeat("a", 64), "", "", false},
+		{"bad DLL pin", "recovery", "bad", strings.Repeat("b", 64), "", false},
+		{"kernel bundle conflict", "recovery", "", "", "candidate", false},
+		{"unknown mode", "shortcut", "", "", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, sub := range []string{"bin", "test/kubernetes_lab"} {
+				if err := os.MkdirAll(filepath.Join(dir, sub), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range map[string]string{
+				"bin/git":                               `printf '%s\n' "$CNI_TEST_ROOT"`,
+				"bin/go":                                `if [ "$2" = '-c' ]; then printf fixture > "$4"; else printf '%s' "$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS" > "$CNI_TEST_ROOT/args.json"; printf '%s\n' "$LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS"; printf 'RETAINED_KUBERNETES_CRASH_CONSUMER_COMPLETE\n'; fi`,
+				"test/kubernetes_lab/verify-runtime.sh": "exit 0",
+				"test/kubernetes_lab/verify-media.sh":   "exit 0",
+			} {
+				if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nset -eu\n"+body+"\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command("bash", "run.sh")
+			cmd.Env = append(os.Environ(), "PATH="+filepath.Join(dir, "bin")+":"+os.Getenv("PATH"), "CNI_TEST_ROOT="+dir,
+				"CALICO_LAB_MODULE="+dir, "CSI_LAB_ARTIFACTS="+filepath.Join(dir, "artifacts"), "LABCONTAINERS_STATE_DIR="+filepath.Join(dir, "state"),
+				"LABCONTAINERS_CALICO_MEDIA=fixture", "LABCONTAINERS_CALICO_MEDIA_SHA256=fixture", "LABCONTAINERS_LABD=fixture",
+				"LABCONTAINERS_VM_IMAGE=fixture", "LABCONTAINERS_WINDOWS_IMAGE=fixture", "LABCONTAINERS_KUBERNETES_CNI=calico-bgp",
+				"CSI_QUALIFICATION_MODE="+tc.mode, "CSI_WINFSP_DLL_SHA256="+tc.dll, "CSI_NATIVE_TEST_SHA256="+tc.native,
+				"CSI_CANDIDATE_BUNDLE="+tc.candidate, "LABCONTAINERS_KUBERNETES_CRASH_VERIFY=1")
+			for _, key := range []string{"CSI_DRIVER_LINUX_IMAGE", "CSI_DRIVER_WINDOWS_IMAGE", "CSI_MOUNT_LINUX_IMAGE", "CSI_MOUNT_WINDOWS_IMAGE"} {
+				cmd.Env = append(cmd.Env, key+"=example.test/image@sha256:"+strings.Repeat("c", 64))
+			}
+			out, err := cmd.CombinedOutput()
+			data, readErr := os.ReadFile(filepath.Join(dir, "args.json"))
+			if !tc.allowed {
+				if err == nil || !os.IsNotExist(readErr) {
+					t.Fatalf("invalid configuration launched: %v %s", err, out)
+				}
+				return
+			}
+			var args []string
+			if err != nil || readErr != nil || json.Unmarshal(data, &args) != nil {
+				t.Fatalf("launch: %v %v %s", err, readErr, out)
+			}
+			for _, required := range []string{"-test.run=^TestCSIRecoveryQualification$", "-csi-emit-crash-plan"} {
+				if !strings.Contains(string(data), required) {
+					t.Fatalf("missing %s: %s", required, data)
+				}
+			}
+			if tc.dll != "" && (!strings.Contains(string(data), "-csi-winfsp-dll-sha256="+tc.dll) || !strings.Contains(string(data), "-csi-candidate-native-test-sha256="+tc.native)) {
+				t.Fatalf("lost DLL/native pins: %s", data)
+			}
+			if !strings.Contains(string(out), "CSI_RECOVERY_QUALIFICATION_COMPLETE") || strings.Contains(string(out), "CSI_QUALIFICATION_COMPLETE") {
+				t.Fatalf("wrong qualification claim: %s", out)
+			}
+		})
+	}
+}

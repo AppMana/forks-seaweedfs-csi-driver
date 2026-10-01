@@ -21,7 +21,7 @@ func existingPersistencePlan(args []string, token, volume string) (string, error
 		}
 		if strings.HasPrefix(arg, "-test.run=") {
 			switch arg {
-			case "-test.run=^TestCSICandidateWinFsp$", "-test.run=^TestCSIStockWinFsp$", "-test.run=^TestCSIRetainedMixedRecovery$":
+			case "-test.run=^TestCSICandidateWinFsp$", "-test.run=^TestCSIStockWinFsp$", "-test.run=^TestCSIRetainedMixedRecovery$", "-test.run=^TestCSIRecoveryQualification$":
 			default:
 				return "", fmt.Errorf("unexpected initial consumer")
 			}
@@ -73,7 +73,7 @@ func TestExistingPersistencePlan(t *testing.T) {
 }
 
 func TestDllOnlyPersistencePlan(t *testing.T) {
-	for _, entry := range []string{"TestCSIStockWinFsp", "TestCSIRetainedMixedRecovery"} {
+	for _, entry := range []string{"TestCSIStockWinFsp", "TestCSIRetainedMixedRecovery", "TestCSIRecoveryQualification"} {
 		t.Run(entry, func(t *testing.T) {
 			args := []string{"-test.run=^" + entry + "$", "-csi-winfsp-dll-sha256=" + strings.Repeat("a", 64)}
 			line, err := existingPersistencePlan(args, "1790647831195823253", "/buckets/pvc-e19d01ca-e92c-460a-998d-a68c07a2b671")

@@ -189,6 +189,12 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 					nativeInputs = `throw ` + psLiteral(err.Error()) + `;`
 				} else {
 					nativeInputs = `$native=` + psLiteral(nativePath) + `; if(!(Test-Path -LiteralPath $native)){throw 'prepared candidate native test executable missing'}; if((Get-FileHash -Algorithm SHA256 -LiteralPath $native).Hash -ine ` + psLiteral(*candidateNativeTestSHA256) + `){throw 'prepared candidate native test executable hash mismatch'};`
+					if *dllOnlySHA256 != "" {
+						// Fresh DLL-only fixtures do not run the kernel-candidate MSI
+						// bootstrap. Stage their separately pinned native oracle from
+						// the read-only ISO; never overwrite a retained executable.
+						nativeInputs = `$native=` + psLiteral(nativePath) + `; if(!(Test-Path -LiteralPath $native)){ $v=@(Get-Volume -FileSystemLabel LCQUAL); if($v.Count -ne 1){throw 'expected one qualification ISO'}; $src=Join-Path ($v[0].DriveLetter+':\') (Split-Path -Leaf $native); if((Get-FileHash -Algorithm SHA256 -LiteralPath $src).Hash -ine ` + psLiteral(*candidateNativeTestSHA256) + `){throw 'offline native test executable hash mismatch'}; Copy-Item -LiteralPath $src -Destination $native }; ` + nativeInputs
+					}
 				}
 			}
 			nativeImage := windowsImage
@@ -340,7 +346,14 @@ func TestClientRunNamesRemainScoped(t *testing.T) {
 	}
 }
 func TestCSIStockWinFsp(t *testing.T) {
-	runCSIQualification(t, nil)
+	runCSIQualification(t, nil, false)
+}
+
+// Targeted recovery qualification retains Git LFS, native persistence, mixed
+// reads/writes, remount and reboot assertions. Its distinct marker must never
+// be interpreted as full WinFsp native conformance qualification.
+func TestCSIRecoveryQualification(t *testing.T) {
+	runCSIQualification(t, nil, true)
 }
 
 func TestCSICandidateWinFsp(t *testing.T) {
@@ -354,10 +367,10 @@ func TestCSICandidateWinFsp(t *testing.T) {
 	if _, err := candidateNativeInput(*nativeTestExecutable, *candidateNativeTestSHA256); err != nil {
 		t.Fatal(err)
 	}
-	runCSIQualification(t, &manifest)
+	runCSIQualification(t, &manifest, false)
 }
 
-func runCSIQualification(t *testing.T, candidate *candidateManifest) {
+func runCSIQualification(t *testing.T, candidate *candidateManifest, recoveryOnly bool) {
 	t.Helper()
 	if !*live {
 		t.Skip("requires disposable mixed-platform Labcontainers Kubernetes fixture")
@@ -446,7 +459,7 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	token := fmt.Sprint(time.Now().UnixNano())
 	testLinuxRoot := "/data/qualification-" + token
 	testWindowsRoot := `C:\data\qualification-` + token
-	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync")
+	run("exec", "-n", ns, clientName("linux"), "--", "mkdir", "-p", testLinuxRoot+"/mixed/.sync", testLinuxRoot+"/native")
 	attestation, marker, attestationErr := nonCandidateAttestation()
 	if attestationErr != nil {
 		t.Fatal(attestationErr)
@@ -470,7 +483,9 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	runCSIGitLFS(t, testWindowsRoot)
 	nativeRoot := testWindowsRoot + `\native`
 	nativeFilerRoot := path.Join(csiFilerRoot(t), "qualification-"+token, "native")
-	runCSINative(t, nativeRoot, nativeFilerRoot, "")
+	if !recoveryOnly {
+		runCSINative(t, nativeRoot, nativeFilerRoot, "")
+	}
 	runCSINative(t, nativeRoot, nativeFilerRoot, "write")
 	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
 	attest("post-recovery")
@@ -482,7 +497,9 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 		}
 		fmt.Println(plan)
 	}
-	if candidate != nil {
+	if recoveryOnly {
+		fmt.Println("CSI_RECOVERY_QUALIFICATION_COMPLETE")
+	} else if candidate != nil {
 		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")
 	} else {
 		fmt.Println("CSI_QUALIFICATION_COMPLETE")

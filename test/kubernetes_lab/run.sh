@@ -43,6 +43,20 @@ for role in driver mount; do
 done
 [[ "$split_count" == 0 || "$split_count" == 4 ]] || { echo 'Provide all four CSI split image references' >&2; exit 1; }
 export LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS=CSI_QUALIFICATION_COMPLETE
+case "${CSI_QUALIFICATION_MODE:-full}" in
+ full) ;;
+ recovery)
+  [[ -z "${CSI_CANDIDATE_BUNDLE:-}" && "$split_count" == 4 ]] || { echo 'Recovery mode requires four explicit images and no kernel candidate bundle' >&2; exit 1; }
+  LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS=$(jq -ce 'map(if . == "-test.run=^TestCSIStockWinFsp$" then "-test.run=^TestCSIRecoveryQualification$" else . end)' <<<"$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS")
+  LABCONTAINERS_KUBERNETES_WORKLOAD_SUCCESS=CSI_RECOVERY_QUALIFICATION_COMPLETE
+  ;;
+ *) echo 'CSI_QUALIFICATION_MODE must be full or recovery' >&2; exit 1 ;;
+esac
+if [[ -n "${CSI_WINFSP_DLL_SHA256:-}${CSI_NATIVE_TEST_SHA256:-}" ]]; then
+ [[ -z "${CSI_CANDIDATE_BUNDLE:-}" && "$split_count" == 4 ]] || { echo 'DLL-only qualification requires four explicit images and no kernel candidate bundle' >&2; exit 1; }
+ [[ "${CSI_WINFSP_DLL_SHA256:-}" =~ ^[0-9a-f]{64}$ && "${CSI_NATIVE_TEST_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] || { echo 'DLL and native test SHA256 pins are both required' >&2; exit 1; }
+ LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS=$(jq -ce --arg dll "$CSI_WINFSP_DLL_SHA256" --arg native "$CSI_NATIVE_TEST_SHA256" '. + ["-csi-winfsp-dll-sha256="+$dll, "-csi-native-test-executable=C:\\tools\\winfsp-csi-candidate.test.exe", "-csi-candidate-native-test-sha256="+$native]' <<<"$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS")
+fi
 # stage_split_media.py produces the final-image + patched-MSI bundle. Explicit
 # selection cannot silently fall back to the stock-driver qualification lane.
 if [[ -n "${CSI_CANDIDATE_BUNDLE:-}" ]]; then
@@ -53,7 +67,7 @@ if [[ -n "${CSI_CANDIDATE_BUNDLE:-}" ]]; then
 fi
 fixture_timeout=90m
 if [[ -n "${LABCONTAINERS_KUBERNETES_CRASH_VERIFY:-}" ]]; then
- [[ "$LABCONTAINERS_KUBERNETES_CRASH_VERIFY" == 1 && -n "${CSI_CANDIDATE_BUNDLE:-}" ]] || { echo 'Crash readback requires explicit 1 and the candidate bundle' >&2; exit 1; }
+ [[ "$LABCONTAINERS_KUBERNETES_CRASH_VERIFY" == 1 && ( -n "${CSI_CANDIDATE_BUNDLE:-}" || "$split_count" == 4 ) ]] || { echo 'Crash readback requires explicit 1 and four pinned images or a candidate bundle' >&2; exit 1; }
  LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS=$(jq -ce '. + ["-csi-emit-crash-plan"]' <<<"$LABCONTAINERS_KUBERNETES_WORKLOAD_ARGS")
  fixture_timeout=130m
 fi
