@@ -3,6 +3,7 @@ package kubernetes_lab
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path"
 	"testing"
 	"time"
@@ -106,5 +107,12 @@ func TestCSIRetainedMixedRecovery(t *testing.T) {
 	runCSIMixedRecovery(t, linuxPath, windowsPath, nativePath, filerPath, token, run, applyClient)
 	attest("post-recovery")
 	checkController()
+	if *emitCrashPlan {
+		plan, err := existingPersistencePlan(os.Args[1:], token, csiFilerRoot(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Println(plan)
+	}
 	fmt.Println("CSI_RETAINED_MIXED_RECOVERY_COMPLETE")
 }

@@ -20,7 +20,9 @@ func existingPersistencePlan(args []string, token, volume string) (string, error
 			return "", fmt.Errorf("existing scope must not be overridden")
 		}
 		if strings.HasPrefix(arg, "-test.run=") {
-			if arg != "-test.run=^TestCSICandidateWinFsp$" {
+			switch arg {
+			case "-test.run=^TestCSICandidateWinFsp$", "-test.run=^TestCSIStockWinFsp$", "-test.run=^TestCSIRetainedMixedRecovery$":
+			default:
 				return "", fmt.Errorf("unexpected initial consumer")
 			}
 			arg = "-test.run=^TestCSIExistingPersistence$"
@@ -67,5 +69,24 @@ func TestExistingPersistencePlan(t *testing.T) {
 	}
 	if _, err := existingPersistencePlan(args, "../other", volume); err == nil {
 		t.Fatal("accepted invalid dataset")
+	}
+}
+
+func TestDllOnlyPersistencePlan(t *testing.T) {
+	for _, entry := range []string{"TestCSIStockWinFsp", "TestCSIRetainedMixedRecovery"} {
+		t.Run(entry, func(t *testing.T) {
+			args := []string{"-test.run=^" + entry + "$", "-csi-winfsp-dll-sha256=" + strings.Repeat("a", 64)}
+			line, err := existingPersistencePlan(args, "1790647831195823253", "/buckets/pvc-e19d01ca-e92c-460a-998d-a68c07a2b671")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var plan struct{ Args []string }
+			if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "KUBERNETES_CRASH_VERIFY=")), &plan); err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Args) != 4 || plan.Args[0] != "-test.run=^TestCSIExistingPersistence$" || plan.Args[1] != args[1] {
+				t.Fatalf("lost pinned DLL or read-only oracle: %v", plan.Args)
+			}
+		})
 	}
 }

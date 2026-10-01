@@ -495,14 +495,14 @@ func runCSIQualification(t *testing.T, candidate *candidateManifest) {
 	runCSIMixedRecovery(t, testLinuxRoot, testWindowsRoot, nativeRoot, nativeFilerRoot, token, run, apply)
 	attest("post-recovery")
 	checkController()
-	if candidate != nil {
-		if *emitCrashPlan {
-			plan, err := existingPersistencePlan(os.Args[1:], token, csiFilerRoot(t))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fmt.Println(plan)
+	if *emitCrashPlan {
+		plan, err := existingPersistencePlan(os.Args[1:], token, csiFilerRoot(t))
+		if err != nil {
+			t.Fatal(err)
 		}
+		fmt.Println(plan)
+	}
+	if candidate != nil {
 		fmt.Println("CSI_CANDIDATE_DRIVER_QUALIFICATION_COMPLETE")
 	} else {
 		fmt.Println("CSI_QUALIFICATION_COMPLETE")
