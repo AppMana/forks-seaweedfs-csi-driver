@@ -91,19 +91,17 @@ func cleanupCorruptedStagingPath(stagingPath string) error {
 // cleanupStaleStagingPath cleans up a stale or corrupted staging mount point.
 // It attempts to unmount and remove the directory.
 //
-// Safety invariant: this function MUST NOT call os.RemoveAll on a path that
-// is still a live mount point. If the staging path is still a working FUSE
-// mount, RemoveAll would walk into the mount and recursively unlink user
-// data through it. Callers (health monitor recovery, NodeStage/NodePublish
-// re-stage) must treat a refusal as a hard failure rather than re-staging
-// over an undeleted mount.
+// Safety invariant: never recursively delete a staging path. It may still
+// be a live FUSE mount, or contain intact local writes exposed after unmount.
+// Neither is disposable. Callers must treat a refusal as a hard failure
+// rather than re-staging over an undeleted path.
 func cleanupStaleStagingPath(stagingPath string) error {
 	glog.Infof("cleaning up stale staging path %s", stagingPath)
 
 	// Surface unmount errors. A failed unmount almost always means the
 	// FUSE mount is still alive (EBUSY because pods or bind mounts still
 	// pin it), and silently dropping the error is what lets the
-	// post-unmount RemoveAll below recurse into a live mount.
+	// post-unmount cleanup hide an unsuccessful detach.
 	unmountErr := mountutil.Unmount(stagingPath)
 	if unmountErr != nil {
 		glog.Warningf("unmount staging path %s failed: %v", stagingPath, unmountErr)
@@ -127,8 +125,7 @@ func cleanupStaleStagingPath(stagingPath string) error {
 
 	// Re-check whether the path is still a mount point AFTER unmount.
 	// If it is, the unmount failed (or completed only as a lazy detach
-	// while the kernel still routes I/O to the FUSE daemon) and
-	// RemoveAll would walk a live FUSE mount.
+	// while the kernel still routes I/O to the FUSE daemon).
 	isMnt, mntErr := mountutil.IsMountPoint(stagingPath)
 	if mntErr != nil {
 		if mount.IsCorruptedMnt(mntErr) {
@@ -140,7 +137,9 @@ func cleanupStaleStagingPath(stagingPath string) error {
 		return fmt.Errorf("refuse to remove staging path %s: still a mount point after unmount (unmount err: %v); not deleting through a live FUSE", stagingPath, unmountErr)
 	}
 
-	if err := os.RemoveAll(stagingPath); err != nil {
+	// Remove only an empty directory (or a leftover symlink), never its
+	// contents. This also stays safe if a mount appears after the check.
+	if err := os.Remove(stagingPath); err != nil && !os.IsNotExist(err) {
 		glog.Warningf("failed to remove staging path %s: %v", stagingPath, err)
 		return err
 	}

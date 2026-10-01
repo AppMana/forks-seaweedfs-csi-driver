@@ -310,10 +310,15 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	}
 
 	vol := volume.(*Volume)
+	// Kubelet has withdrawn this publish request. Even if unmount or
+	// directory removal fails, recovery must not race its retry by binding
+	// the path again. Keep the cleanup error visible and leave its data in
+	// place; a later successful NodePublishVolume can track the path anew.
+	// The per-volume mutex also excludes retryPublishPaths/recoverVolume.
+	vol.RemovePublishPath(targetPath)
 	if err := vol.Unpublish(targetPath); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
-	vol.RemovePublishPath(targetPath)
 
 	glog.Infof("volume %s successfully unpublished from %s", volumeID, targetPath)
 
