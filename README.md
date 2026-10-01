@@ -87,6 +87,22 @@ promote the exact runtime-qualified OCI digests without rebuilding, use a new
 release tag, and pin those digests in deployment manifests. Never republish an
 existing deployed tag with newly built bytes.
 
+To publish an already-packaged OCI archive without rebuilding it:
+
+```sh
+python3 test/kubernetes_lab/publish_candidate.py \
+  --archive /absolute/path/to/mount-linux.tar \
+  --record /absolute/path/to/mount-linux-result.json \
+  --component mount --results-root /absolute/path/to/retained-results --publish
+```
+
+Omit `--publish` for local verification only. The packaging record must match
+the archive checksum, manifest/config digests, platform, entrypoint and payload
+hashes. Publication uses `ghcr.io/appmana/seaweedfs-<component>:candidate-<digest>`
+and verifies the registry digest afterward. It cannot select a stable release
+tag; a successful publication receipt is not a runtime-test waiver. Registry
+credentials come from the normal `crane` credential configuration.
+
 ## Deploying the Windows DaemonSets
 
 Deploy the upstream controller, StorageClass and Linux DaemonSets as usual
