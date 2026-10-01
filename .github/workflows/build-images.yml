@@ -1,4 +1,4 @@
-name: Build, test, and publish CSI driver images
+name: Build, test, and publish CSI candidate images
 
 on:
   push:
@@ -13,7 +13,10 @@ permissions:
 
 env:
   REGISTRY: ghcr.io/appmana
-  IMAGE_TAG: v1.4.26-appmana.post.2
+  # Build tests are not exact-image VM qualification. Never overwrite a
+  # deployed release tag, including on reruns of the same source revision.
+  # Promote qualified image digests separately without rebuilding them.
+  IMAGE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
   # Platform-specific source pins preserve the qualified Linux binary while
   # Windows receives its cache/namespace fixes. Keep Dockerfile defaults and the build-pin
   # contract aligned. Source qualification does not qualify rebuilt image bytes.

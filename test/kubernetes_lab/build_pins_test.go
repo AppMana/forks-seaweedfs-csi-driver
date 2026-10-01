@@ -7,6 +7,17 @@ import (
 	"testing"
 )
 
+func TestBuildImagesNeverOverwriteReleasedTags(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/build-images.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "  IMAGE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+	if !strings.Contains(string(b), want) {
+		t.Fatal("builds must use source/run/attempt-specific candidate tags, not overwrite deployed release tags")
+	}
+}
+
 // Packaging changes must not silently restore an older, unqualified weed
 // binary. This is a source contract, not a substitute for image qualification.
 func TestMountBuildPinsAgree(t *testing.T) {

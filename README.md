@@ -26,7 +26,9 @@ How it works on Windows:
 The Windows mount image currently pins upstream WinFsp **2.1.25156** using
 `WINFSP_MSI_URL` and `WINFSP_MSI_SHA256` in
 `cmd/seaweedfs-mount/Dockerfile.Windows`. WinFsp's DLL and kernel driver are
-host-installed components, not private copies inside each workload container.
+host-installed components in the default image. The optional `dll-only` target
+instead places a hash-pinned DLL beside `weed.exe` in the mount HostProcess
+image; it retains the official MSI and does not replace the host kernel driver.
 The bootstrap shown below only checks for an existing registry key: it does
 **not** verify or upgrade an existing installation when the image changes.
 Do not use a DaemonSet image rollout as a driver-upgrade mechanism.
@@ -71,6 +73,19 @@ parallel, checks the packaged bytes/platform/entrypoint, smoke-tests Linux
 startup, and retains OCI archives, digests and logs. It never pushes images,
 starts VMs or upgrades a host WinFsp installation. These packaging checks do
 not substitute for the real-VM workload evidence or production driver signing.
+
+For the DLL-only variant, add `--winfsp-dll` and include `winfsp-x64.dll` with
+its checksum in the input manifest. This mode requires the pinned official
+MSI. Verify the running mount process loads the image-local DLL and that the
+host SYS remains Microsoft-signed with test signing disabled. Absolute-symlink
+fixes that require the fork's kernel driver are not delivered by this option.
+
+The build workflow publishes only
+`candidate-<source-sha>-<run-id>-<run-attempt>` tags. These are source-build
+candidates, not qualified releases or the prebuilt DLL-only images. For release,
+promote the exact runtime-qualified OCI digests without rebuilding, use a new
+release tag, and pin those digests in deployment manifests. Never republish an
+existing deployed tag with newly built bytes.
 
 ## Deploying the Windows DaemonSets
 
