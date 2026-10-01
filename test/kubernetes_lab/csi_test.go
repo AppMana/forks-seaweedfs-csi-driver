@@ -563,6 +563,7 @@ func runCSIMixedRecovery(t *testing.T, testLinuxRoot, testWindowsRoot, nativeRoo
 	for _, phase := range []string{"seed", "verify-seed", "cache-coherence-files", "rewrite", "verify-rewrite", "rename-delete", "verify-final"} {
 		runPhase(phase)
 	}
+	runLinuxSupervisorRecovery(t, testLinuxRoot, token, run)
 	for _, platform := range []string{"linux", "windows"} {
 		run("delete", "pod", "-n", ns, clientName(platform), "--wait=true")
 		apply(clientPod(platform))
