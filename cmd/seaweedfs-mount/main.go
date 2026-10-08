@@ -15,6 +15,7 @@ import (
 
 	"github.com/seaweedfs/seaweedfs-csi-driver/pkg/mountmanager"
 	"github.com/seaweedfs/seaweedfs/weed/glog"
+	"github.com/seaweedfs/seaweedfs/weed/util/fla9"
 )
 
 var (
@@ -23,6 +24,14 @@ var (
 )
 
 func main() {
+	// Log to stderr only, which the container runtime already collects.
+	// glog's default also writes log files under TMPDIR, the container layer
+	// on the node's root disk; a full root disk then stops all file logging
+	// (appmana-031, 2026-10-08). glog registers its flags with fla9, not the
+	// standard flag package this command parses.
+	if err := fla9.Set("logtostderr", "true"); err != nil {
+		panic(err)
+	}
 	flag.Parse()
 
 	scheme, address, err := mountmanager.ParseEndpoint(*endpoint)
