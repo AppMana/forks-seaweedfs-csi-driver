@@ -1,7 +1,7 @@
 # SEAWEEDFS_COMMIT matches the build workflow; go.mod is the CSI API dependency.
 # Update via: docker build --build-arg SEAWEEDFS_COMMIT=<hash> ...
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=dd2b9ef98d38488121808765148306c365e341b1
+ARG SEAWEEDFS_COMMIT=fe559475e128275bf8d7257c9d70fc1c55cd003f
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e
@@ -26,7 +26,8 @@ RUN git clone ${SEAWEEDFS_REPO} /go/src/github.com/seaweedfs/seaweedfs \
     && git clone -b ${GO_FUSE_BRANCH} ${GO_FUSE_REPO} /go/src/github.com/seaweedfs/forks-go-fuse \
     && cd /go/src/github.com/seaweedfs/forks-go-fuse && git checkout ${GO_FUSE_COMMIT} \
     && cd /go/src/github.com/seaweedfs/seaweedfs/weed \
-    && go install -tags 5BytesOffset \
+    && CGO_ENABLED=0 go install -trimpath -tags 5BytesOffset \
+         -ldflags "-X github.com/seaweedfs/seaweedfs/weed/util/version.COMMIT=${SEAWEEDFS_COMMIT}" \
     && go clean -cache -modcache
 
 # Build seaweedfs-mount from current context

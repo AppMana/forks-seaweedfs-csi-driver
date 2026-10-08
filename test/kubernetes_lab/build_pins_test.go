@@ -31,7 +31,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 	}
 	workflow := read(".github/workflows/build-images.yml")
 	pins := map[string]string{
-		"SEAWEEDFS_COMMIT":         "dd2b9ef98d38488121808765148306c365e341b1",
+		"SEAWEEDFS_COMMIT":         "fe559475e128275bf8d7257c9d70fc1c55cd003f",
 		"SEAWEEDFS_WINDOWS_COMMIT": "4cc1474e2b287245f53c9fa5e2c94822e09ce5a7",
 	}
 	for key, want := range pins {
@@ -57,6 +57,19 @@ func TestMountBuildPinsAgree(t *testing.T) {
 				"ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e",
 				"git checkout ${GO_FUSE_COMMIT}",
 				"-tags 5BytesOffset",
+			} {
+				if !strings.Contains(source, required) {
+					t.Errorf("missing %q", required)
+				}
+			}
+			if file == "Dockerfile.Windows" {
+				return
+			}
+			// The fork's release recipe: static, and stamped with the exact
+			// source so `weed version` names what is running.
+			for _, required := range []string{
+				"CGO_ENABLED=0",
+				"version.COMMIT=${SEAWEEDFS_COMMIT}",
 			} {
 				if !strings.Contains(source, required) {
 					t.Errorf("missing %q", required)
