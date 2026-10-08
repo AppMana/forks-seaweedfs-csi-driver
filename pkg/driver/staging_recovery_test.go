@@ -145,3 +145,54 @@ func TestRecoverStagedVolumesFromDiskRestoresMissingPublishMount(t *testing.T) {
 		t.Fatalf("missing publish path %q was not recovered from pod vol_data.json", publishPath)
 	}
 }
+
+// Kubelet names a pod's publish directory after the PersistentVolume, which
+// for a statically provisioned volume need not match the volume handle. On
+// appmana-031 (2026-10-08) PVs hf-cache-shared-appmana and
+// hf-cache-spellsource-appmana (handles /buckets/pvc-a0c4794b-..., /buckets/
+// pvc-fb1f1647-...) were found with "0 publish paths" after a node-plugin
+// restart, so a supervisor restart left three pods on dead FUSE binds
+// (ENOTCONN) while the staging mounts recovered.
+func TestRecoverStagedVolumesFromDiskFindsPublishPathsOfStaticPVs(t *testing.T) {
+	root := t.TempDir()
+	scanDir := filepath.Join(root, "plugins", "kubernetes.io", "csi")
+	driverName := "seaweedfs-csi-driver"
+	volumeID := "/buckets/pvc-a0c4794b-c512-4459-86c6-37fa291d3a57"
+	otherID := "/buckets/pvc-fb1f1647-63e0-4ad7-bda0-0109a8f0e744"
+
+	stagingDir := filepath.Join(scanDir, driverName, "staging-hash")
+	if err := os.MkdirAll(filepath.Join(stagingDir, "globalmount"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stagingDir, "vol_data.json"), []byte(`{"driverName":"seaweedfs-csi-driver","volumeHandle":"`+volumeID+`"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	publish := func(pod, pvName, handle string) string {
+		volumeDir := filepath.Join(root, "pods", pod, "volumes", "kubernetes.io~csi", pvName)
+		if err := os.MkdirAll(filepath.Join(volumeDir, "mount"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(volumeDir, "vol_data.json"), []byte(`{"driverName":"seaweedfs-csi-driver","volumeHandle":"`+handle+`","specVolID":"`+pvName+`"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return filepath.Join(volumeDir, "mount")
+	}
+	mine := publish("pod-a", "hf-cache-shared-appmana", volumeID)
+	other := publish("pod-a", "hf-cache-spellsource-appmana", otherID)
+
+	ns := newTestNodeServer(t, &fakeMounter{})
+	ns.Driver.name = driverName
+	ns.recoverStagedVolumesFromDisk(scanDir)
+
+	value, ok := ns.volumes.Load(volumeID)
+	if !ok {
+		t.Fatalf("volume %q was not recovered", volumeID)
+	}
+	vol := value.(*Volume)
+	if _, ok := vol.publishPaths.Load(mine); !ok {
+		t.Fatalf("publish path %q of a static PV was not recovered", mine)
+	}
+	if _, ok := vol.publishPaths.Load(other); ok {
+		t.Fatalf("publish path %q of another volume was attributed to %s", other, volumeID)
+	}
+}

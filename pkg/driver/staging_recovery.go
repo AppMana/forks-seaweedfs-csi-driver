@@ -97,31 +97,41 @@ func (ns *NodeServer) recoverPublishPathsFromDisk(scanDir, volumeID string, vol 
 		return
 	}
 
+	// Kubelet names each publish directory after the PersistentVolume, which
+	// matches the handle's basename only for dynamically provisioned volumes.
+	// Its vol_data.json beside the mount records the handle itself; use that,
+	// and the name only when vol_data.json cannot be read.
 	volumeName := path.Base(filepath.ToSlash(volumeID))
 	for _, pod := range pods {
 		if !pod.IsDir() {
 			continue
 		}
-		volumeDir := filepath.Join(podsDir, pod.Name(), "volumes", "kubernetes.io~csi", volumeName)
-		publishPath := filepath.Join(volumeDir, "mount")
-		if _, err := os.Lstat(publishPath); err != nil && !isCorruptedMount(err) {
-			// A partial recovery may already have removed the dead mount
-			// child. Kubelet still owns the publish and records its identity
-			// beside that child, so recover it from vol_data.json instead of
-			// waiting for a NodePublish call that kubelet will not replay.
-			data, readErr := os.ReadFile(filepath.Join(volumeDir, "vol_data.json"))
-			if readErr != nil {
-				continue
-			}
-			var vd kubeletVolData
-			if json.Unmarshal(data, &vd) != nil || vd.VolumeHandle != volumeID {
-				continue
-			}
-			if vd.DriverName != "" && vd.DriverName != ns.Driver.name {
-				continue
-			}
+		csiDir := filepath.Join(podsDir, pod.Name(), "volumes", "kubernetes.io~csi")
+		volumes, err := os.ReadDir(csiDir)
+		if err != nil {
+			continue
 		}
-		vol.AddPublishPath(publishPath, false)
-		glog.Infof("staging recovery: volume %s tracking publish path %s", volumeID, publishPath)
+		for _, v := range volumes {
+			if !v.IsDir() {
+				continue
+			}
+			volumeDir := filepath.Join(csiDir, v.Name())
+			publishPath := filepath.Join(volumeDir, "mount")
+			if data, readErr := os.ReadFile(filepath.Join(volumeDir, "vol_data.json")); readErr == nil {
+				var vd kubeletVolData
+				if json.Unmarshal(data, &vd) != nil || vd.VolumeHandle != volumeID {
+					continue
+				}
+				if vd.DriverName != "" && vd.DriverName != ns.Driver.name {
+					continue
+				}
+			} else if v.Name() != volumeName {
+				continue
+			} else if _, err := os.Lstat(publishPath); err != nil && !isCorruptedMount(err) {
+				continue
+			}
+			vol.AddPublishPath(publishPath, false)
+			glog.Infof("staging recovery: volume %s tracking publish path %s", volumeID, publishPath)
+		}
 	}
 }
