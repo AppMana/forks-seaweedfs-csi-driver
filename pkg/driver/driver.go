@@ -43,6 +43,8 @@ type SeaweedFsDriver struct {
 	ConcurrentWriters int
 	ConcurrentReaders int
 	CacheCapacityMB   int
+	// WriteBufferSizeMB caps each mount's dirty data (memory and swap), 0 for no cap.
+	WriteBufferSizeMB int
 	CacheMetaTtlSec   int
 	CacheDir          string
 	UidMap            string

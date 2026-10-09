@@ -136,3 +136,40 @@ func TestBuildMountArgsWinFspOptions(t *testing.T) {
 	}
 	t.Fatalf("expected %q in args, got %v", want, args)
 }
+
+// The write buffer cap bounds the dirty data a close() or fsync() can find,
+// so a flush drains within the mount's request deadline. The node default
+// applies unless the volume sets its own.
+func TestBuildMountArgsWriteBufferSize(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		nodeMB     int
+		volContext map[string]string
+		want       string
+	}{
+		{name: "node default", nodeMB: 1024, volContext: map[string]string{}, want: "-writeBufferSizeMB=1024"},
+		{name: "volume override", nodeMB: 1024, volContext: map[string]string{"writeBufferSizeMB": "256"}, want: "-writeBufferSizeMB=256"},
+		{name: "unset", nodeMB: 0, volContext: map[string]string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &mountServiceMounter{
+				driver:     &SeaweedFsDriver{WriteBufferSizeMB: tc.nodeMB},
+				volumeID:   "/buckets/pvc-1234",
+				volContext: tc.volContext,
+			}
+			args, err := m.buildMountArgs("/staging", "/cache", "/socket", []string{"filer:8888"})
+			if err != nil {
+				t.Fatalf("buildMountArgs: %v", err)
+			}
+			var got []string
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "-writeBufferSizeMB=") {
+					got = append(got, arg)
+				}
+			}
+			if tc.want == "" && len(got) != 0 || tc.want != "" && !slices.Equal(got, []string{tc.want}) {
+				t.Fatalf("writeBufferSizeMB args = %v, want %q", got, tc.want)
+			}
+		})
+	}
+}

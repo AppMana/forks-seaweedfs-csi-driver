@@ -149,6 +149,7 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 		"cacheMetaTtlSec":    strconv.Itoa(m.driver.CacheMetaTtlSec),
 		"concurrentReaders":  strconv.Itoa(m.driver.ConcurrentReaders),
 		"concurrentWriters":  strconv.Itoa(m.driver.ConcurrentWriters),
+		"writeBufferSizeMB":  writeBufferSizeArg(m.driver.WriteBufferSizeMB),
 		"readerCacheMode":    "",
 		"winfspOptions":      "",
 		"map.uid":            m.driver.UidMap,
@@ -220,6 +221,15 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 	}
 
 	return args, nil
+}
+
+// writeBufferSizeArg leaves the mount's own default (no cap) when the node
+// sets none.
+func writeBufferSizeArg(mb int) string {
+	if mb <= 0 {
+		return ""
+	}
+	return strconv.Itoa(mb)
 }
 
 func initialCollectionQuotaMB(capacityBytes string) string {
