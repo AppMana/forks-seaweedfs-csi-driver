@@ -51,20 +51,34 @@ func removeMountArtifact(path string) error {
 // mount: the path must be a reparse point and must be readable through
 // the mounted filesystem.
 func isStagingPathHealthy(stagingPath string) bool {
+	return stagingPathHealth(stagingPath) == healthOK
+}
+
+// stagingPathHealth is the health monitor's view of the staging path. On
+// Windows a slow mount blocks in ReadDir and is classified healthSlow by
+// checkHealth's own timeout, so this only reports healthOK or healthDead.
+func stagingPathHealth(stagingPath string) healthResult {
 	if !isReparsePoint(stagingPath) {
 		glog.V(4).Infof("staging path %s is not a mount point", stagingPath)
-		return false
+		return healthDead
 	}
 
 	// Try to read the directory to verify the WinFsp filesystem is
 	// responsive. A dangling reparse point (weed.exe killed) fails here.
 	if _, err := os.ReadDir(stagingPath); err != nil {
 		glog.Warningf("staging path %s is not readable (WinFsp mount may be dead): %v", stagingPath, err)
-		return false
+		return healthDead
 	}
 
 	glog.V(4).Infof("staging path %s is healthy", stagingPath)
-	return true
+	return healthOK
+}
+
+// isLikelyNotMountPointFn reports whether path is not a live mount. A
+// dangling reparse point is not one (see isPathMounted).
+var isLikelyNotMountPointFn = func(path string) (bool, error) {
+	mounted, err := isPathMounted(path)
+	return !mounted, err
 }
 
 // cleanupCorruptedStagingPath removes the dangling reparse point left

@@ -7,14 +7,17 @@ ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=6ead27e20708423a00718812de796241659ad387
 ARG PAYLOAD_STAGE=builder
 
-FROM golang:1.26.0-alpine AS builder
+# Stay on the native build platform and cross-compile from there. Running the
+# toolchain under QEMU for every target architecture is slow and makes the git
+# clone below fail with "cannot pread pack file: Bad address".
+FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine AS builder
 
-RUN apk add git g++
+RUN apk add git
 
-# Build weed binary from a specific commit for reproducibility. The
+# Fetch the weed source at a specific commit for reproducibility. The
 # AppMana fork's go.mod replaces go-fuse with a ../forks-go-fuse sibling
-# checkout, and the production build is the large-disk (5BytesOffset)
-# variant.
+# checkout. Everything down to the TARGET* args is architecture independent,
+# so it is downloaded once and shared by all target platforms.
 ARG SEAWEEDFS_REPO
 ARG SEAWEEDFS_COMMIT
 ARG GO_FUSE_REPO
@@ -26,15 +29,27 @@ RUN git clone ${SEAWEEDFS_REPO} /go/src/github.com/seaweedfs/seaweedfs \
     && git clone -b ${GO_FUSE_BRANCH} ${GO_FUSE_REPO} /go/src/github.com/seaweedfs/forks-go-fuse \
     && cd /go/src/github.com/seaweedfs/forks-go-fuse && git checkout ${GO_FUSE_COMMIT} \
     && cd /go/src/github.com/seaweedfs/seaweedfs/weed \
-    && CGO_ENABLED=0 go install -trimpath -tags 5BytesOffset \
-         -ldflags "-X github.com/seaweedfs/seaweedfs/weed/util/version.COMMIT=${SEAWEEDFS_COMMIT}" \
-    && go clean -cache -modcache
+    && go mod download
+
+WORKDIR /go/src/github.com/seaweedfs/seaweedfs-csi-driver
+COPY go.mod go.sum ./
+RUN go mod download
 
 # Build seaweedfs-mount from current context
-WORKDIR /go/src/github.com/seaweedfs/seaweedfs-csi-driver
 COPY . .
 
-RUN go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount/main.go && go clean -cache -modcache
+# The production weed is the large-disk (5BytesOffset) variant, static, and
+# stamped with the exact source so `weed version` names what is running.
+ARG TARGETOS
+ARG TARGETARCH
+ARG TARGETVARIANT
+ENV CGO_ENABLED=0
+RUN export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
+    && go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount/main.go \
+    && cd /go/src/github.com/seaweedfs/seaweedfs/weed \
+    && CGO_ENABLED=0 go build -trimpath -tags 5BytesOffset \
+         -ldflags "-X github.com/seaweedfs/seaweedfs/weed/util/version.COMMIT=${SEAWEEDFS_COMMIT}" \
+         -o /go/bin/weed .
 
 # Optional promotion path: package already-qualified bytes without rebuilding.
 # Build context contains weed and seaweedfs-mount; both digests are mandatory.

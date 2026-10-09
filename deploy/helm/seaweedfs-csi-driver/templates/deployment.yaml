@@ -15,6 +15,9 @@ spec:
     spec:
       priorityClassName: system-cluster-critical
       serviceAccountName: {{ template "seaweedfs-csi-driver.name" . }}-controller-sa
+      {{- with .Values.controller.nodeSelector }}
+      nodeSelector: {{ toYaml . | nindent 8 }}
+      {{- end }}
       affinity:
         {{- if and .Values.controller.affinity .Values.controller.affinity.nodeAffinity }}
         nodeAffinity: {{ toYaml .Values.controller.affinity.nodeAffinity | nindent 10 }}
@@ -50,12 +53,22 @@ spec:
             - --driverName=$(DRIVER_NAME)
             - --components=controller
             - --attacher={{ .Values.csiAttacher.enabled }}
+            {{- with .Values.topologyKeys }}
+            - --topologyKeys={{ join "," . }}
+            {{- end }}
           env:
             - name: CSI_ENDPOINT
               value: unix:///var/lib/csi/sockets/pluginproxy/csi.sock
             - name: SEAWEEDFS_FILER
               value: {{ .Values.seaweedfsFiler | quote }}
-
+            {{- if .Values.vacStore.useTls }}
+            - name: WEED_VAC_USE_TLS
+              value: "true"
+            {{- with .Values.vacStore.caFile }}
+            - name: WEED_VAC_CA
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
             - name: DRIVER_NAME
               value: {{ .Values.driverName | quote }}
             {{- if .Values.tlsSecret }}
@@ -80,6 +93,11 @@ spec:
               mountPath: /var/run/secrets/app/tls
               readOnly: true
            {{- end }}
+           {{- if .Values.vacStore.caSecret }}
+            - name: vac-ca
+              mountPath: /var/run/secrets/vac-ca
+              readOnly: true
+           {{- end }}
            {{- include "seaweedfs-csi-driver.security-volumemount" . | nindent 12 }}
           resources: {{ toYaml .Values.controller.resources | nindent 12 }}
 
@@ -92,6 +110,9 @@ spec:
             - --leader-election
             - --leader-election-namespace={{ .Release.Namespace }}
             - --http-endpoint=:9809
+            {{- if .Values.topologyKeys }}
+            - --feature-gates=Topology=true
+            {{- end }}
             #- --v=9
           env:
             - name: ADDRESS
@@ -242,5 +263,10 @@ spec:
         - name: tls
           secret:
             secretName: {{ .Values.tlsSecret }}
+        {{- end }}
+        {{- if .Values.vacStore.caSecret }}
+        - name: vac-ca
+          secret:
+            secretName: {{ .Values.vacStore.caSecret }}
         {{- end }}
         {{- include "seaweedfs-csi-driver.security-volume" . | nindent 8 }}

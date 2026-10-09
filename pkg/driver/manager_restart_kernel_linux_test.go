@@ -35,6 +35,15 @@ func TestManagerRestartKernelMountRecovery(t *testing.T) {
 		t.Fatalf("kernel mount precondition: mounted=%v err=%v", mounted, err)
 	}
 	state.healthy.Store(false)
+	// tmpfs answers statfs; a dead FUSE daemon fails it with ENOTCONN.
+	origStatfs := statfsFn
+	t.Cleanup(func() { statfsFn = origStatfs })
+	statfsFn = func(p string) error {
+		if p == path {
+			return unix.ENOTCONN
+		}
+		return origStatfs(p)
+	}
 	ns.detachStagingFn = detachDeadMountPoint
 	ns.cleanupStagingFn = func(path string) error { return os.Remove(path) }
 	ns.recoverVolume("kernel-forgotten")

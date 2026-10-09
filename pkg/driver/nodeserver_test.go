@@ -4,8 +4,10 @@
 package driver
 
 import (
+	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +104,100 @@ func TestStageNewVolumePropagatesMounterError(t *testing.T) {
 	_, err := ns.stageNewVolume("vol-1", t.TempDir(), nil, false)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected error %v, got %v", wantErr, err)
+	}
+}
+
+func TestStageNewVolumeAppliesPersistedVolumeAttributes(t *testing.T) {
+	var capturedVolContext map[string]string
+	ns := newTestNodeServer(t, &fakeMounter{})
+	ns.mounterFactory = func(volumeID string, readOnly bool, driver *SeaweedFsDriver, volContext map[string]string) (Mounter, error) {
+		capturedVolContext = volContext
+		return &fakeMounter{}, nil
+	}
+	ns.vacLoader = func(_ context.Context, volumeID string) (map[string]string, error) {
+		return map[string]string{
+			"diskType":          "ssd",
+			"concurrentReaders": "64",
+			"collection":        "must-not-apply",
+		}, nil
+	}
+
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	if _, err := ns.stageNewVolume("/buckets/pvc-1", stagingPath, map[string]string{"collection": "c", "concurrentReaders": "128"}, false); err != nil {
+		t.Fatalf("stageNewVolume failed: %v", err)
+	}
+
+	if capturedVolContext["diskType"] != "ssd" {
+		t.Errorf("persisted diskType not applied: %v", capturedVolContext)
+	}
+	if capturedVolContext["concurrentReaders"] != "64" {
+		t.Errorf("persisted concurrentReaders not overriding PV value: %v", capturedVolContext)
+	}
+	if capturedVolContext["collection"] != "c" {
+		t.Errorf("structural key leaked from persisted store: %v", capturedVolContext)
+	}
+}
+
+func TestStageNewVolumeFailsWhenVacStoreUnreadable(t *testing.T) {
+	ns := newTestNodeServer(t, &fakeMounter{})
+	ns.vacLoader = func(_ context.Context, volumeID string) (map[string]string, error) {
+		return nil, errors.New("filer unreachable")
+	}
+
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	_, err := ns.stageNewVolume("vol-1", stagingPath, map[string]string{"concurrentReaders": "128"}, false)
+	if err == nil {
+		t.Fatal("stageNewVolume must fail when the VAC store is unreadable")
+	}
+}
+
+func TestStageNewVolumeFallsBackWhenNoVacEntry(t *testing.T) {
+	var capturedVolContext map[string]string
+	ns := newTestNodeServer(t, &fakeMounter{})
+	ns.mounterFactory = func(volumeID string, readOnly bool, driver *SeaweedFsDriver, volContext map[string]string) (Mounter, error) {
+		capturedVolContext = volContext
+		return &fakeMounter{}, nil
+	}
+	ns.vacLoader = func(_ context.Context, volumeID string) (map[string]string, error) {
+		return nil, nil
+	}
+
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	if _, err := ns.stageNewVolume("vol-1", stagingPath, map[string]string{"concurrentReaders": "128"}, false); err != nil {
+		t.Fatalf("stageNewVolume must proceed when no VAC entry exists: %v", err)
+	}
+	if capturedVolContext["concurrentReaders"] != "128" {
+		t.Errorf("PV attributes must stay intact when no VAC entry exists: %v", capturedVolContext)
+	}
+}
+
+func TestStageNewVolumeRejectsWritebackDlmCombo(t *testing.T) {
+	ns := newTestNodeServer(t, &fakeMounter{})
+	ns.vacLoader = func(_ context.Context, volumeID string) (map[string]string, error) {
+		return map[string]string{"writebackCache": "true"}, nil
+	}
+
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	_, err := ns.stageNewVolume("/buckets/pvc-1", stagingPath, map[string]string{"dlm": "true"}, false)
+	if err == nil {
+		t.Fatal("expected combo rejection")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("error should name the exclusivity: %v", err)
+	}
+}
+
+func TestStageNewVolumeValidatesMergedValues(t *testing.T) {
+	ns := newTestNodeServer(t, &fakeMounter{})
+	ns.vacLoader = func(_ context.Context, volumeID string) (map[string]string, error) {
+		return map[string]string{"concurrentReaders": "64"}, nil
+	}
+
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	// Static PV attribute with a typo: stage must fail with an invalid
+	// argument error instead of a weed mount flag parse failure.
+	_, err := ns.stageNewVolume("/buckets/pvc-1", stagingPath, map[string]string{"writebackCache": "yes"}, false)
+	if err == nil || !strings.Contains(err.Error(), "invalid argument") {
+		t.Fatalf("expected invalid argument error, got %v", err)
 	}
 }

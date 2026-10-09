@@ -2,14 +2,41 @@
 seaweedfsFiler: "SEAWEEDFS_FILER:8888"
 storageClassName: seaweedfs-storage
 storageClassVolumeBindingMode: Immediate
+# parameters for the storage class created by the chart. Example:
+# storageClassParameters:
+#   volumeServerAccess: "filerProxy"
+storageClassParameters: {}
 isDefaultStorageClass: false
 tlsSecret: ""
+
+# TLS for the VAC store — the driver persists VolumeAttributesClass
+# parameters on the filer via its HTTP API, independent from [grpc] ca in
+# security.toml which configures gRPC trust only. On a filer with security
+# enabled the driver signs these calls with the jwt.filer_signing keys from
+# security.toml; useTls keeps those tokens off the wire.
+vacStore:
+  # true => https://, false (default) => http://
+  useTls: false
+  # In-container CA bundle path for verifying the filer HTTP certificate.
+  # Falls back to [grpc] ca, then to the system trust store.
+  caFile: ""
+  # Existing Secret mounted read-only at /var/run/secrets/vac-ca so caFile
+  # can reference it, e.g. /var/run/secrets/vac-ca/ca.crt
+  caSecret: ""
 #logVerbosity: 4
 #cacheCapacityMB: 0
 #cacheMetaTtlSec: 60
 
 #concurrentWriters: 128
 #concurrentReaders: 128
+
+# Extra flags appended to every weed mount command. Arguments managed by the
+# CSI driver, such as -dir and -filer, cannot be overridden here.
+mountExtraArgs: []
+#  - -debug
+#  - -debug.port=6062
+#  - -readerCacheSizeMB=256
+#  - -memoryLimitMB=768
 
 # Security configuration for SeaweedFS security.toml
 # Mounts security.toml to /etc/seaweedfs/security.toml in seaweedfs-mount
@@ -25,10 +52,16 @@ security:
   create: false
   # "secret" or "configmap" — type of resource to create when create=true
   type: secret
-  # Inline security.toml content used when create=true. Example:
+  # Inline security.toml content used when create=true. The jwt.filer_signing
+  # keys must match the filer's security.toml so the driver can authenticate
+  # its VAC store HTTP calls. Example:
   #   content: |
   #     [jwt.signing.read]
   #     key = "your-jwt-read-key"
+  #     [jwt.filer_signing]
+  #     key = "your-filer-write-key"
+  #     [jwt.filer_signing.read]
+  #     key = "your-filer-read-key"
   #     [grpc]
   #     ca = "/usr/local/share/ca-certificates/ca.crt"
   #     [grpc.client]
@@ -133,8 +166,23 @@ mountService:
 
 driverName: seaweedfs-csi-driver
 
+# fsGroupPolicy defines whether/how kubelet applies pod securityContext.fsGroup
+# to volumes of this driver. SeaweedFS volumes are FUSE mounts and are always
+# reported RWX, so the API default (ReadWriteOnceWithFSType) silently skips
+# fsGroup for every SeaweedFS volume. "File" makes kubelet apply fsGroup on
+# mount regardless of access mode or fsType, matching native filesystem
+# volumes. Only lower this if you explicitly don't want fsGroup handling.
+fsGroupPolicy: File
+
+# Node label keys reported as the accessible topology of each node, e.g.
+# ["topology.kubernetes.io/zone"]. When set, CSINode gets topologyKeys, so
+# StorageClass allowedTopologies is honoured and pods with SeaweedFS PVCs are
+# only scheduled on nodes running this driver.
+topologyKeys: []
+
 controller:
   replicas: 1
+  nodeSelector: {}
   affinity: {}
   tolerations:
   resources: {}
@@ -170,6 +218,7 @@ node:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 25%
+  nodeSelector: {}
   affinity: {}
   tolerations:
   livenessProbe:

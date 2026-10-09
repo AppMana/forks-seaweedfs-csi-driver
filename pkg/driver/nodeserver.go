@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -32,6 +33,10 @@ type BindMountFn func(source, target string, readOnly bool) error
 // mount. Overridden in tests to simulate a crashed mount.
 type HealthCheckFn func(stagingPath string) bool
 
+// NodeLabelsFn returns the labels of the node the driver runs on. Tests can
+// replace this to avoid real Kubernetes API calls.
+type NodeLabelsFn func(nodeName string) (map[string]string, error)
+
 type NodeServer struct {
 	csi.UnimplementedNodeServer
 
@@ -40,6 +45,7 @@ type NodeServer struct {
 	// information about the managed volumes
 	volumes       sync.Map
 	volumeMutexes *KeyMutex
+	activeStats   sync.Map
 
 	// stopCh signals the health monitor goroutine to stop. Guarded by
 	// stopOnce so NodeCleanup is safe to call from multiple shutdown paths.
@@ -57,18 +63,39 @@ type NodeServer struct {
 	activeRecoveries sync.Map // map[string]struct{}
 
 	// Injectable factories / operations (overridden in tests).
-	mounterFactory   MounterFactory
-	capacityFn       CapacityFn
-	isHealthyFn      HealthCheckFn
-	cleanupStagingFn func(stagingPath string) error
-	detachStagingFn  func(stagingPath string) error
-	unmountFn        func(path string) error
-	bindMountFn      BindMountFn
+	mounterFactory    MounterFactory
+	capacityFn        CapacityFn
+	isHealthyFn       HealthCheckFn
+	cleanupStagingFn  func(stagingPath string) error
+	detachStagingFn   func(stagingPath string) error
+	unmountFn         func(path string) error
+	bindMountFn       BindMountFn
+	nodeLabelsFn      NodeLabelsFn
+	readVolumeUsageFn func(path string) (*volumeUsage, error)
 
 	// healthCheckTimeout bounds any single isHealthyFn call. Zero means
 	// defaultHealthCheckTimeout. Overridden in tests so a slow-mount
 	// scenario can be exercised without waiting the full production bound.
 	healthCheckTimeout time.Duration
+
+	// healthProbeFn is the health monitor's tri-state probe. Nil makes
+	// checkHealth use isHealthyFn, whose fast false is healthDead.
+	healthProbeFn func(path string) healthResult
+
+	// vacLoader reads the persisted VolumeAttributesClass parameters for a
+	// volume. Nil means the default filer-backed store.
+	vacLoader func(ctx context.Context, volumeID string) (map[string]string, error)
+}
+
+func (ns *NodeServer) loadPersistedVolumeAttributes(ctx context.Context, volumeID string) (map[string]string, error) {
+	if ns.vacLoader != nil {
+		return ns.vacLoader(ctx, volumeID)
+	}
+	store, err := newFilerVacStore(ns.Driver.filers)
+	if err != nil {
+		return nil, err
+	}
+	return store.Read(ctx, volumeID)
 }
 
 var _ = csi.NodeServer(&NodeServer{})
@@ -304,7 +331,9 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		glog.Warningf("volume %s hasn't been published", volumeID)
 
 		// make sure there is no any garbage
-		_ = cleanupMountPoint(targetPath)
+		if err := cleanupMountPoint(targetPath); err == nil {
+			resetStatfsProbe(targetPath)
+		}
 
 		return &csi.NodeUnpublishVolumeResponse{}, nil
 	}
@@ -328,9 +357,46 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 func (ns *NodeServer) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) (*csi.NodeGetInfoResponse, error) {
 	glog.V(3).Infof("node get info, node id: %s", ns.Driver.nodeID)
 
-	return &csi.NodeGetInfoResponse{
+	resp := &csi.NodeGetInfoResponse{
 		NodeId: ns.Driver.nodeID,
-	}, nil
+	}
+
+	segments, err := ns.nodeTopologySegments()
+	if err != nil {
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+	if len(segments) > 0 {
+		glog.Infof("node %s accessible topology: %v", ns.Driver.nodeID, segments)
+		resp.AccessibleTopology = &csi.Topology{Segments: segments}
+	}
+
+	return resp, nil
+}
+
+// nodeTopologySegments resolves the configured topology keys to the values
+// they have on this node, so the orchestrator only places volumes on nodes
+// where the driver actually runs.
+func (ns *NodeServer) nodeTopologySegments() (map[string]string, error) {
+	if len(ns.Driver.TopologyKeys) == 0 {
+		return nil, nil
+	}
+
+	labels, err := ns.nodeLabelsFn(ns.Driver.nodeID)
+	if err != nil {
+		return nil, err
+	}
+
+	segments := make(map[string]string, len(ns.Driver.TopologyKeys))
+	for _, key := range ns.Driver.TopologyKeys {
+		value, found := labels[key]
+		if !found {
+			glog.Warningf("node %s has no label %s, skipping it in accessible topology", ns.Driver.nodeID, key)
+			continue
+		}
+		segments[key] = value
+	}
+
+	return segments, nil
 }
 
 func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
@@ -352,7 +418,69 @@ func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 					},
 				},
 			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_GET_VOLUME_STATS,
+					},
+				},
+			},
 		},
+	}, nil
+}
+
+// NodeGetVolumeStats reports filesystem usage for a staged or published volume.
+func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVolumeStatsRequest) (*csi.NodeGetVolumeStatsResponse, error) {
+	volumeID := req.GetVolumeId()
+	volumePath := req.GetVolumePath()
+
+	if volumeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume ID missing in request")
+	}
+	if volumePath == "" {
+		return nil, status.Error(codes.InvalidArgument, "Volume path missing in request")
+	}
+	if err := volumeStatsSupported(); err != nil {
+		return nil, err
+	}
+
+	statsCtx, cancel := context.WithTimeout(ctx, defaultHealthCheckTimeout)
+	defer cancel()
+
+	unlock, err := ns.lockVolumeStats(statsCtx, volumeID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+
+	if err := ns.validateVolumeStatsPath(volumeID, volumePath); err != nil {
+		return nil, err
+	}
+
+	usage, err := ns.readVolumeUsageWithTimeout(statsCtx, volumeID, volumePath)
+	if err != nil {
+		return nil, err
+	}
+
+	respUsage := []*csi.VolumeUsage{
+		{
+			Unit:      csi.VolumeUsage_BYTES,
+			Total:     usage.capacityBytes,
+			Used:      usage.usedBytes,
+			Available: usage.availableBytes,
+		},
+	}
+	if usage.inodes > 0 && usage.inodes != math.MaxInt64 {
+		respUsage = append(respUsage, &csi.VolumeUsage{
+			Unit:      csi.VolumeUsage_INODES,
+			Total:     usage.inodes,
+			Used:      usage.inodesUsed,
+			Available: usage.inodesFree,
+		})
+	}
+
+	return &csi.NodeGetVolumeStatsResponse{
+		Usage: respUsage,
 	}, nil
 }
 
@@ -379,7 +507,9 @@ func (ns *NodeServer) NodeUnstageVolume(ctx context.Context, req *csi.NodeUnstag
 		glog.Warningf("volume %s hasn't been staged", volumeID)
 
 		// make sure there is no any garbage
-		_ = cleanupMountPoint(stagingTargetPath)
+		if err := cleanupMountPoint(stagingTargetPath); err == nil {
+			resetStatfsProbe(stagingTargetPath)
+		}
 
 		// Also clean up cache directory and socket if they exist
 		CleanupVolumeResources(ns.Driver, volumeID)
@@ -455,6 +585,22 @@ func (ns *NodeServer) removeVolumeMutex(volumeID string) {
 // tests can inject fakes that do not touch the real mount service or k8s API.
 func (ns *NodeServer) stageNewVolume(volumeID, stagingTargetPath string, volContext map[string]string, readOnly bool) (*Volume, error) {
 	effectiveVolContext := cloneVolumeContext(volContext)
+	persisted, err := ns.loadPersistedVolumeAttributes(context.Background(), volumeID)
+	if err != nil {
+		return nil, fmt.Errorf("reading persisted volume attributes for %s: %w", volumeID, err)
+	}
+	if len(persisted) > 0 {
+		mergePersistedVolumeAttributes(effectiveVolContext, persisted)
+	}
+	// Static PV attributes skip controller-side validation entirely, so the
+	// fully merged context is validated here — the last point before the
+	// mount command is built.
+	if err := validateConstrainedParameterValues(effectiveVolContext); err != nil {
+		return nil, fmt.Errorf("invalid argument: %w", err)
+	}
+	if err := validateWritebackDlmCombo(effectiveVolContext); err != nil {
+		return nil, fmt.Errorf("invalid argument: %w", err)
+	}
 	capacity, hasCapacity, err := ns.resolveVolumeCapacity(volumeID, effectiveVolContext)
 	if err != nil {
 		return nil, err
