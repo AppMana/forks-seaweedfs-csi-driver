@@ -4,10 +4,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/seaweedfs/seaweedfs-csi-driver/pkg/datalocality"
@@ -19,16 +21,6 @@ import (
 )
 
 func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
-	if n.CacheDir != "" {
-		cleanCacheDir := filepath.Clean(n.CacheDir)
-		cleanTempDir := filepath.Clean(os.TempDir())
-		if cleanCacheDir != cleanTempDir {
-			if err := removeDirContent(cleanCacheDir); err != nil {
-				glog.Warningf("error cleaning up cache dir %s: %v", cleanCacheDir, err)
-			}
-		}
-	}
-
 	ns := &NodeServer{
 		Driver:         n,
 		volumeMutexes:  NewKeyMutex(),
@@ -44,8 +36,65 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 		bindMountFn:      defaultBindMount,
 	}
 	ns.recoverStagedVolumesFromDisk(n.StagingScanDir)
+	ns.removeOrphanCacheDirs()
 	ns.startHealthMonitor(defaultHealthCheckInterval)
 	return ns
+}
+
+// removeOrphanCacheDirs deletes cache directories that no mount can still be
+// using. A directory is kept when its volume is staged on this node or when a
+// weed mount process accepts connections on the volume's local socket.
+func (ns *NodeServer) removeOrphanCacheDirs() {
+	if ns.Driver.CacheDir == "" {
+		return
+	}
+	cacheBase := filepath.Clean(ns.Driver.CacheDir)
+	if cacheBase == filepath.Clean(os.TempDir()) {
+		return
+	}
+	keep := map[string]struct{}{}
+	ns.volumes.Range(func(key, _ any) bool {
+		keep[filepath.Base(GetCacheDir(cacheBase, key.(string)))] = struct{}{}
+		return true
+	})
+	entries, err := os.ReadDir(cacheBase)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			glog.Warningf("cannot read cache dir %s: %v", cacheBase, err)
+		}
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if _, staged := keep[name]; staged {
+			continue
+		}
+		if isCacheOfServedMount(ns.Driver.volumeSocketDir, name) {
+			glog.Infof("keeping cache dir %s of a mount the mount service is serving", name)
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(cacheBase, name)); err != nil {
+			glog.Warningf("error removing orphan cache dir %s: %v", name, err)
+		}
+	}
+}
+
+// isCacheOfServedMount reports whether a weed mount accepts connections on
+// the local socket of the volume whose cache directory is cacheDirName.
+func isCacheOfServedMount(socketDir, cacheDirName string) bool {
+	if len(cacheDirName) != sha256.Size*2 {
+		return false
+	}
+	if _, err := hex.DecodeString(cacheDirName); err != nil {
+		return false
+	}
+	socket := mountmanager.LocalSocketPathForHash(socketDir, cacheDirName)
+	conn, err := net.DialTimeout("unix", socket, time.Second)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 func GetCacheDir(cacheBase, volumeID string) string {
@@ -129,22 +178,6 @@ func logGRPC(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, h
 	}
 	glog.V(3).Infof("GRPC %s response %+v", info.FullMethod, resp)
 	return resp, err
-}
-
-func removeDirContent(path string) error {
-	files, err := filepath.Glob(filepath.Join(path, "*"))
-	if err != nil {
-		return err
-	}
-
-	for _, file := range files {
-		err = os.RemoveAll(file)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 type KeyMutex struct {

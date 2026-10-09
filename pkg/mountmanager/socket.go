@@ -15,6 +15,14 @@ func LocalSocketPath(baseDir, volumeID string) string {
 		baseDir = DefaultSocketDir
 	}
 	h := sha256.Sum256([]byte(volumeID))
-	hashStr := hex.EncodeToString(h[:8]) // 16 hex chars = 64 bits
-	return filepath.Join(baseDir, fmt.Sprintf("seaweedfs-mount-%s.sock", hashStr))
+	return LocalSocketPathForHash(baseDir, hex.EncodeToString(h[:]))
+}
+
+// LocalSocketPathForHash returns LocalSocketPath for the volume whose
+// hex-encoded SHA256 is volumeHash, such as a cache directory name.
+func LocalSocketPathForHash(baseDir, volumeHash string) string {
+	if baseDir == "" {
+		baseDir = DefaultSocketDir
+	}
+	return filepath.Join(baseDir, fmt.Sprintf("seaweedfs-mount-%s.sock", volumeHash[:16])) // 16 hex chars = 64 bits
 }
