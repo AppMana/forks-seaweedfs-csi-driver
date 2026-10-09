@@ -31,7 +31,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 	}
 	workflow := read(".github/workflows/build-images.yml")
 	pins := map[string]string{
-		"SEAWEEDFS_COMMIT":         "fe559475e128275bf8d7257c9d70fc1c55cd003f",
+		"SEAWEEDFS_COMMIT":         "ba124c57aa029a688509db7380b92c3e38b0631e",
 		"SEAWEEDFS_WINDOWS_COMMIT": "4cc1474e2b287245f53c9fa5e2c94822e09ce5a7",
 	}
 	for key, want := range pins {
@@ -54,7 +54,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 				"golang:1.26.0",
 				"ARG SEAWEEDFS_COMMIT=" + pin,
 				"ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs",
-				"ARG GO_FUSE_COMMIT=1bdeec4d57d1e9ee85d4938f36f2ed876dd7bd5e",
+				"ARG GO_FUSE_COMMIT=6ead27e20708423a00718812de796241659ad387",
 				"git checkout ${GO_FUSE_COMMIT}",
 				"-tags 5BytesOffset",
 			} {
