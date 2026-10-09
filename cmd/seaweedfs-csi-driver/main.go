@@ -27,6 +27,7 @@ var (
 	mountExtraArgs       = flag.String("mountExtraArgs", "[]", "JSON array of extra weed mount flags, using -name=value or boolean -name")
 	concurrentReaders    = flag.Int("concurrentReaders", 128, "limit concurrent chunk fetches for read operations")
 	cacheCapacityMB      = flag.Int("cacheCapacityMB", 0, "local file chunk cache capacity in MB")
+	writeBufferSizeMB    = flag.Int("writeBufferSizeMB", 0, "cap on each mount's dirty data (memory and swap) in MB, so close() and fsync() drain within the mount's request deadline; 0 means no cap")
 	cacheMetaTtlSec      = flag.Int("cacheMetaTtlSec", 60, "metadata cache TTL in seconds")
 	cacheDir             = flag.String("cacheDir", os.TempDir(), "local cache directory for file chunks and meta data")
 	uidMap               = flag.String("map.uid", "", "map local uid to uid on filer, comma-separated <local_uid>:<filer_uid>")
@@ -96,6 +97,7 @@ func main() {
 	drv.MountExtraArgs = parsedMountExtraArgs
 	drv.CacheCapacityMB = *cacheCapacityMB
 	drv.CacheMetaTtlSec = *cacheMetaTtlSec
+	drv.WriteBufferSizeMB = *writeBufferSizeMB
 	drv.CacheDir = *cacheDir
 	drv.UidMap = *uidMap
 	drv.GidMap = *gidMap
