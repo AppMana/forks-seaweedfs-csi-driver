@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"fmt"
 	"runtime/debug"
 	"time"
 
@@ -21,6 +22,12 @@ const (
 	// checks before recovery runs. A dead mount fails instantly, so
 	// real failures still recover within ~3 sweep intervals.
 	defaultUnhealthyThreshold = 3
+
+	// defaultHungMountAfter is how long a staging mount may leave every
+	// probe unanswered before it counts as dead. weed mount answers every
+	// FUSE request within 60 s, so a mount still silent after that across
+	// defaultUnhealthyThreshold timed-out probes is hung, not busy.
+	defaultHungMountAfter = 60 * time.Second
 )
 
 func (ns *NodeServer) startHealthMonitor(interval time.Duration) {
@@ -215,27 +222,42 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 		return
 	}
 
+	probeStart := time.Now()
 	switch ns.checkHealth(vol.StagedPath) {
 	case healthSlow:
-		// Busy under IO load, not dead. Reset the consecutive-death
-		// counter — a timeout is not evidence of death — and leave the
-		// live mount completely alone. Tearing it down here is the bug
-		// that handed running pods "Transport endpoint is not connected".
+		// A slow probe alone is not evidence of death: reset the
+		// consecutive-death counter and leave the mount alone. Tearing
+		// down a mount that is merely busy is the bug that handed running
+		// pods "Transport endpoint is not connected". Only a mount that
+		// stays unanswered past the request bound of weed mount is hung.
 		vol.healthFailCount.Store(0)
-		glog.Warningf("health monitor: staging mount for volume %s at %s is slow (health check timed out); not recovering", volumeID, vol.StagedPath)
+		streak, since := vol.noteUnhealthy(probeStart)
+		unanswered := time.Since(since)
+		if streak < defaultUnhealthyThreshold || unanswered <= ns.hungAfter() {
+			glog.Warningf("health monitor: staging mount for volume %s at %s is slow (health check timed out, %d consecutive over %v); not recovering", volumeID, vol.StagedPath, streak, unanswered.Round(time.Second))
+			return
+		}
+		msg := fmt.Sprintf("staging mount %s has not answered %d consecutive health checks over %v, longer than weed mount takes to answer any request; treating it as dead", vol.StagedPath, streak, unanswered.Round(time.Second))
+		vol.setAbnormal(msg)
+		glog.Errorf("health monitor: volume %s: %s", volumeID, msg)
+		ns.recoverHungVolume(volumeID)
 		return
 	case healthDead:
+		vol.noteUnhealthy(probeStart)
 		n := vol.healthFailCount.Add(1)
 		if n < defaultUnhealthyThreshold {
 			glog.Warningf("health monitor: staging mount for volume %s failed check %d/%d at %s", volumeID, n, defaultUnhealthyThreshold, vol.StagedPath)
 			return
 		}
 		vol.healthFailCount.Store(0)
+		msg := fmt.Sprintf("staging mount %s failed %d consecutive health checks: the FUSE mount is dead", vol.StagedPath, defaultUnhealthyThreshold)
+		vol.setAbnormal(msg)
 		glog.Warningf("health monitor: detected unhealthy staging mount for volume %s at %s (%d consecutive failures)", volumeID, vol.StagedPath, defaultUnhealthyThreshold)
 		ns.recoverVolume(volumeID)
 		return
 	}
 	vol.healthFailCount.Store(0)
+	vol.noteHealthy()
 
 	// Staging is alive; check whether any publish bind mounts have
 	// been dropped (e.g. from a previous partial recovery) and need
@@ -249,14 +271,26 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 // isDeadMount reports whether path is a mount whose daemon is dead. The
 // probe is bounded like checkHealth and deduplicated per path: a timeout
 // is inconclusive — a live but hung mount — which must not be detached
-// and removed underneath containers.
-func isDeadMount(path string) bool {
+// and removed underneath containers unless hung already established that
+// the mount has been unanswered past the request bound of weed mount.
+func isDeadMount(path string, hung bool) bool {
 	err, probed := probeStatfs(path)
 	if !probed {
+		if hung {
+			glog.Warningf("health monitor: statfs probe for %s timed out again; the mount is hung", path)
+			return true
+		}
 		glog.Warningf("health monitor: statfs probe for %s timed out, treating the mount as live", path)
 		return false
 	}
 	return isCorruptedMount(err)
+}
+
+func (ns *NodeServer) hungAfter() time.Duration {
+	if ns.hungMountAfter > 0 {
+		return ns.hungMountAfter
+	}
+	return defaultHungMountAfter
 }
 
 // hasUnhealthyPublishPath returns true if any of the Volume's tracked
@@ -350,6 +384,20 @@ func (ns *NodeServer) retryPublishPaths(volumeID string) {
 }
 
 func (ns *NodeServer) recoverVolume(volumeID string) {
+	ns.recoverVolumeAs(volumeID, false)
+}
+
+// recoverHungVolume recovers a staging mount that stayed unanswered past
+// the request bound of weed mount. Its rechecks accept a timed-out probe
+// as confirmation; a probe that answers healthy still aborts.
+func (ns *NodeServer) recoverHungVolume(volumeID string) {
+	ns.recoverVolumeAs(volumeID, true)
+}
+
+func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
+	confirmed := func(r healthResult) bool {
+		return r == healthDead || (hung && r == healthSlow)
+	}
 	volumeMutex := ns.getVolumeMutex(volumeID)
 	volumeMutex.Lock()
 	defer volumeMutex.Unlock()
@@ -367,8 +415,9 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 	// when the mount is *confirmed dead*. If the re-check comes back
 	// healthy (recovered on its own) or slow (busy under load, not
 	// dead), abort — tearing down a live mount here is precisely what
-	// gives a running pod "Transport endpoint is not connected".
-	if r := ns.checkHealth(vol.StagedPath); r != healthDead {
+	// gives a running pod "Transport endpoint is not connected". A mount
+	// already established as hung stays confirmed while it stays slow.
+	if r := ns.checkHealth(vol.StagedPath); !confirmed(r) {
 		glog.Infof("health monitor: volume %s no longer confirmed dead (state=%s), skipping recovery", volumeID, r)
 		return
 	}
@@ -437,7 +486,7 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 	// happens with a non-nil unmounter retained by the still-running CSI
 	// plugin. Re-check after the RPC, then detach the confirmed-dead artifact
 	// in either case. Never detach a mount that became healthy or merely slow.
-	if r := ns.checkHealth(stagingPath); r != healthDead {
+	if r := ns.checkHealth(stagingPath); !confirmed(r) {
 		glog.Infof("health monitor: staging mount for volume %s no longer confirmed dead after manager unmount (state=%s), aborting recovery", volumeID, r)
 		return
 	}
@@ -448,7 +497,7 @@ func (ns *NodeServer) recoverVolume(volumeID string) {
 	// mounted path only when statfs proves it dead; a mount that answers
 	// statfs, or whose probe timed out, may still serve I/O.
 	if notMnt, err := isLikelyNotMountPointFn(stagingPath); err == nil && !notMnt {
-		if !isDeadMount(stagingPath) {
+		if !isDeadMount(stagingPath, hung) {
 			glog.Errorf("health monitor: refusing to clean up staging path %s for volume %s — still a mount point; aborting recovery to avoid data deletion", stagingPath, volumeID)
 			return
 		}

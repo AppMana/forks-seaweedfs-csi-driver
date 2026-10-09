@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/seaweedfs/seaweedfs-csi-driver/pkg/mountmanager"
 	"github.com/seaweedfs/seaweedfs/weed/glog"
@@ -32,9 +33,17 @@ type Volume struct {
 	// fires only at defaultUnhealthyThreshold (one slow check under IO
 	// load must not tear down a live mount).
 	healthFailCount atomic.Int32
-	publishPaths    sync.Map          // targetPath (string) -> bool (readOnly)
-	volContext      map[string]string // volume context stored for re-staging
-	readOnly        bool              // FUSE-level readOnly flag
+	// unhealthyStreak counts consecutive dead or timed-out health checks
+	// and unhealthySince (unix nanoseconds) records when the first of them
+	// started, so a mount that never answers is told apart from a busy one.
+	unhealthyStreak atomic.Int32
+	unhealthySince  atomic.Int64
+	// abnormal is the message NodeGetVolumeStats reports while the mount
+	// is persistently dead or unresponsive; nil while it is not.
+	abnormal     atomic.Pointer[string]
+	publishPaths sync.Map          // targetPath (string) -> bool (readOnly)
+	volContext   map[string]string // volume context stored for re-staging
+	readOnly     bool              // FUSE-level readOnly flag
 
 	// bindMountFn is used by Publish to perform the bind mount from the
 	// staging path to the pod-specific target path. Populated by the
@@ -132,6 +141,34 @@ func (vol *Volume) Unpublish(targetPath string) error {
 	resetStatfsProbe(targetPath)
 
 	return nil
+}
+
+// noteUnhealthy records one dead or timed-out health check whose probe
+// started at start. It returns the length of the current streak and when
+// its first probe started.
+func (vol *Volume) noteUnhealthy(start time.Time) (int32, time.Time) {
+	vol.unhealthySince.CompareAndSwap(0, start.UnixNano())
+	return vol.unhealthyStreak.Add(1), time.Unix(0, vol.unhealthySince.Load())
+}
+
+// noteHealthy ends an unhealthy streak after a check the mount answered.
+func (vol *Volume) noteHealthy() {
+	vol.unhealthyStreak.Store(0)
+	vol.unhealthySince.Store(0)
+	vol.abnormal.Store(nil)
+}
+
+func (vol *Volume) setAbnormal(message string) {
+	vol.abnormal.Store(&message)
+}
+
+// abnormalMessage returns the reason the mount is persistently dead or
+// unresponsive, and false while it is not.
+func (vol *Volume) abnormalMessage() (string, bool) {
+	if m := vol.abnormal.Load(); m != nil {
+		return *m, true
+	}
+	return "", false
 }
 
 func (vol *Volume) AddPublishPath(path string, readOnly bool) {

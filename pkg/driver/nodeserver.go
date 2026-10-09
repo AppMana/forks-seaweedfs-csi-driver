@@ -78,6 +78,11 @@ type NodeServer struct {
 	// scenario can be exercised without waiting the full production bound.
 	healthCheckTimeout time.Duration
 
+	// hungMountAfter is how long a staging mount may leave consecutive
+	// probes unanswered before it is treated as dead. Zero means
+	// defaultHungMountAfter. Overridden in tests.
+	hungMountAfter time.Duration
+
 	// healthProbeFn is the health monitor's tri-state probe. Nil makes
 	// checkHealth use isHealthyFn, whose fast false is healthDead.
 	healthProbeFn func(path string) healthResult
@@ -425,6 +430,13 @@ func (ns *NodeServer) NodeGetCapabilities(ctx context.Context, req *csi.NodeGetC
 					},
 				},
 			},
+			{
+				Type: &csi.NodeServiceCapability_Rpc{
+					Rpc: &csi.NodeServiceCapability_RPC{
+						Type: csi.NodeServiceCapability_RPC_VOLUME_CONDITION,
+					},
+				},
+			},
 		},
 	}, nil
 }
@@ -457,6 +469,16 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 		return nil, err
 	}
 
+	// A persistently dead or unresponsive mount has no usage to report,
+	// and probing it again would only wait out the timeout.
+	if value, ok := ns.volumes.Load(volumeID); ok {
+		if message, abnormal := value.(*Volume).abnormalMessage(); abnormal {
+			return &csi.NodeGetVolumeStatsResponse{
+				VolumeCondition: &csi.VolumeCondition{Abnormal: true, Message: message},
+			}, nil
+		}
+	}
+
 	usage, err := ns.readVolumeUsageWithTimeout(statsCtx, volumeID, volumePath)
 	if err != nil {
 		return nil, err
@@ -480,7 +502,8 @@ func (ns *NodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 	}
 
 	return &csi.NodeGetVolumeStatsResponse{
-		Usage: respUsage,
+		Usage:           respUsage,
+		VolumeCondition: &csi.VolumeCondition{Abnormal: false, Message: "volume mount answered statfs"},
 	}, nil
 }
 
