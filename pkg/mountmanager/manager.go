@@ -18,6 +18,9 @@ import (
 type Manager struct {
 	weedBinary string
 
+	// procRoot is where process file descriptors are read from.
+	procRoot string
+
 	mu     sync.Mutex
 	mounts map[string]*mountEntry
 	locks  *keyMutex
@@ -37,6 +40,7 @@ func NewManager(cfg Config) *Manager {
 	binary = resolveWeedBinary(binary)
 	return &Manager{
 		weedBinary: binary,
+		procRoot:   "/proc",
 		mounts:     make(map[string]*mountEntry),
 		locks:      newKeyMutex(),
 	}
@@ -198,10 +202,11 @@ func (m *Manager) startMount(req *MountRequest) (*mountEntry, error) {
 		return nil, errors.New("mountArgs is required")
 	}
 
-	process, err := startWeedMountProcess(m.weedBinary, args, targetPath, req.VolumeID)
+	process, err := startWeedMount(m.weedBinary, args, targetPath, req.VolumeID)
 	if err != nil {
 		return nil, err
 	}
+	removeUnheldInstanceCaches(cacheDir, m.procRoot)
 
 	return &mountEntry{
 		volumeID:    req.VolumeID,
@@ -254,6 +259,8 @@ type weedMountProcess struct {
 	// job object handle). It is a zero-size struct on Linux.
 	platformProcess
 }
+
+var startWeedMount = startWeedMountProcess
 
 func startWeedMountProcess(command string, args []string, target string, volumeID string) (*weedMountProcess, error) {
 	cmd := exec.Command(command, args...)

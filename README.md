@@ -16,10 +16,16 @@ whose README describes the mount's own fixes, flags and benchmarks.
   of statically provisioned volumes (matched by volume handle), and its health
   monitor remounts dead FUSE mounts and re-binds them inside running
   containers without deleting pods. Stage and Publish succeed only on a
-  healthy mount; a slow probe is never treated as dead.
+  healthy mount. A slow probe is not death: a mount counts as hung only when
+  three consecutive checks time out and one probe has stayed unanswered for
+  longer than the mount's 60 s request bound; it is then stopped through the
+  mount service and re-staged. `NodeGetVolumeStats` reports usage and a
+  `VolumeCondition`, abnormal while a mount is dead or hung.
 - **Cache directories**: node startup removes only cache directories whose
   volume is neither staged nor served by a running mount, instead of emptying
-  the whole cache base under live mounts.
+  the whole cache base under live mounts. Starting a volume's mount removes
+  its other instance cache directories (weed names them after its version)
+  that no process holds open.
 - **Write buffer cap**: `--writeBufferSizeMB` caps every mount's dirty data,
   so `close()` and `fsync()` drain within the mount's request deadline.
 - **Per-volume mount options** from StorageClass parameters or static PV
