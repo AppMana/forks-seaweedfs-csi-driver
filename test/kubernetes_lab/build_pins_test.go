@@ -2,7 +2,9 @@ package kubernetes_lab
 
 import (
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -77,4 +79,49 @@ func TestMountBuildPinsAgree(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Every image builder toolchain must satisfy the go directive of go.mod:
+// the builds run with GOTOOLCHAIN=local, so an older image fails the build.
+func TestBuilderGoSatisfiesGoMod(t *testing.T) {
+	mod, err := os.ReadFile("../../go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := regexp.MustCompile(`(?m)^go (\d+)\.(\d+)(?:\.(\d+))?$`).FindStringSubmatch(string(mod))
+	if m == nil {
+		t.Fatal("go.mod has no go directive")
+	}
+	want := [3]int{atoi(t, m[1]), atoi(t, m[2]), atoi(t, m[3])}
+	files, err := filepath.Glob("../../cmd/*/Dockerfile*")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no Dockerfiles found: %v", err)
+	}
+	image := regexp.MustCompile(`golang:(\d+)\.(\d+)(?:\.(\d+))?`)
+	for _, file := range files {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tag := range image.FindAllStringSubmatch(string(b), -1) {
+			got := [3]int{atoi(t, tag[1]), atoi(t, tag[2]), atoi(t, tag[3])}
+			// A tag without a patch level is the newest patch release.
+			older := got[0] < want[0] || got[0] == want[0] && (got[1] < want[1] || got[1] == want[1] && tag[3] != "" && got[2] < want[2])
+			if older {
+				t.Errorf("%s builds with %s, older than go %s in go.mod", strings.TrimPrefix(file, "../../"), tag[0], strings.TrimPrefix(m[0], "go "))
+			}
+		}
+	}
+}
+
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	if s == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }
