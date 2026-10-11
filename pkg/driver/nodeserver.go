@@ -83,6 +83,10 @@ type NodeServer struct {
 	// defaultHungMountAfter. Overridden in tests.
 	hungMountAfter time.Duration
 
+	// volumeUnmounterFn returns an Unmounter that asks the mount service to
+	// stop the weed mount of a volume, for volumes rebuilt without one.
+	volumeUnmounterFn func(volumeID string) (Unmounter, error)
+
 	// healthProbeFn is the health monitor's tri-state probe. Nil makes
 	// checkHealth use isHealthyFn, whose fast false is healthDead.
 	healthProbeFn func(path string) healthResult

@@ -45,6 +45,12 @@ type fakeMountState struct {
 	// Lets tests exercise the recovery path's response to a manager
 	// teardown failure.
 	unstageErr error
+
+	// modelService makes Mount behave like the mount service: while a
+	// weed mount it started is still serving (until Unmount stops it),
+	// Mount answers "already mounted" without starting another one.
+	modelService bool
+	serving      bool
 }
 
 func newFakeMountState() *fakeMountState {
@@ -76,6 +82,11 @@ type stateMounter struct{ state *fakeMountState }
 
 func (m *stateMounter) Mount(target string) (Unmounter, error) {
 	m.state.mu.Lock()
+	if m.state.modelService && m.state.serving {
+		m.state.mu.Unlock()
+		return &stateUnmounter{state: m.state}, nil
+	}
+	m.state.serving = true
 	m.state.stageCalls++
 	m.state.mu.Unlock()
 	// Create the target so any downstream checkMount sees a directory.
@@ -91,6 +102,9 @@ func (u *stateUnmounter) Unmount() error {
 	u.state.mu.Lock()
 	u.state.unstageCalls++
 	err := u.state.unstageErr
+	if err == nil {
+		u.state.serving = false
+	}
 	u.state.mu.Unlock()
 	return err
 }
@@ -133,6 +147,9 @@ func newNodeServerWithFakes(t *testing.T, state *fakeMountState) *NodeServer {
 			state.unmountCalls++
 			state.mu.Unlock()
 			return nil
+		},
+		volumeUnmounterFn: func(volumeID string) (Unmounter, error) {
+			return &stateUnmounter{state: state}, nil
 		},
 		bindMountFn: func(source, target string, readOnly bool) error {
 			state.mu.Lock()

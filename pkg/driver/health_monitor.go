@@ -3,6 +3,7 @@ package driver
 import (
 	"fmt"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
@@ -121,29 +122,57 @@ func (ns *NodeServer) checkTimeout() time.Duration {
 // reported as healthDead (fast, definitive) so the caller does not wait
 // for the timeout.
 func (ns *NodeServer) checkHealth(path string) healthResult {
-	done := make(chan healthResult, 1)
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				glog.Errorf("health monitor: health check for %s panicked: %v\n%s", path, r, debug.Stack())
-				select {
-				case done <- healthDead:
-				default:
+	result, _ := ns.checkHealthUnanswered(path)
+	return result
+}
+
+// healthProbe is one in-flight health probe of a path. Checks that arrive
+// while it is still blocked attach to it, so a mount that never answers
+// is seen as one probe left unanswered ever longer, not as a series of
+// fresh probes that each merely timed out.
+type healthProbe struct {
+	start  time.Time
+	done   chan struct{}
+	result healthResult
+}
+
+var healthProbes sync.Map // map[string]*healthProbe
+
+// checkHealthUnanswered is checkHealth that also reports, for healthSlow,
+// how long the mount has left the probe in flight for path unanswered:
+// the health probe itself or the statfs probe inside it, whichever
+// started first.
+func (ns *NodeServer) checkHealthUnanswered(path string) (healthResult, time.Duration) {
+	p, loaded := healthProbes.LoadOrStore(path, &healthProbe{start: time.Now(), done: make(chan struct{})})
+	probe := p.(*healthProbe)
+	if !loaded {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					glog.Errorf("health monitor: health check for %s panicked: %v\n%s", path, r, debug.Stack())
+					probe.result = healthDead
 				}
-			}
+				close(probe.done)
+				// CompareAndDelete so a probe orphaned by
+				// resetStatfsProbe cannot remove a newer probe's entry.
+				healthProbes.CompareAndDelete(path, probe)
+			}()
+			probe.result = ns.probeHealth(path)
 		}()
-		done <- ns.probeHealth(path)
-	}()
+	}
 	timeout := ns.checkTimeout()
 	select {
-	case result := <-done:
-		if result == healthSlow {
-			glog.Warningf("health monitor: health check for %s did not get an answer from the mount; treating as slow (busy), NOT dead — will retry", path)
+	case <-probe.done:
+		if probe.result != healthSlow {
+			return probe.result, 0
 		}
-		return result
+		unanswered := statfsProbeUnanswered(path)
+		glog.Warningf("health monitor: health check for %s did not get an answer from the mount (unanswered for %v); treating as slow (busy), NOT dead — will retry", path, unanswered.Round(time.Second))
+		return healthSlow, unanswered
 	case <-time.After(timeout):
-		glog.Warningf("health monitor: health check for %s timed out after %v; treating as slow (busy), NOT dead — will retry", path, timeout)
-		return healthSlow
+		unanswered := max(time.Since(probe.start), statfsProbeUnanswered(path))
+		glog.Warningf("health monitor: health check for %s timed out after %v (unanswered for %v); treating as slow (busy), NOT dead — will retry", path, timeout, unanswered.Round(time.Second))
+		return healthSlow, unanswered
 	}
 }
 
@@ -222,28 +251,28 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 		return
 	}
 
-	probeStart := time.Now()
-	switch ns.checkHealth(vol.StagedPath) {
+	result, unanswered := ns.checkHealthUnanswered(vol.StagedPath)
+	switch result {
 	case healthSlow:
 		// A slow probe alone is not evidence of death: reset the
 		// consecutive-death counter and leave the mount alone. Tearing
 		// down a mount that is merely busy is the bug that handed running
 		// pods "Transport endpoint is not connected". Only a mount that
-		// stays unanswered past the request bound of weed mount is hung.
+		// leaves one probe unanswered past the request bound of weed
+		// mount is hung.
 		vol.healthFailCount.Store(0)
-		streak, since := vol.noteUnhealthy(probeStart)
-		unanswered := time.Since(since)
+		streak := vol.noteUnhealthy()
 		if streak < defaultUnhealthyThreshold || unanswered <= ns.hungAfter() {
-			glog.Warningf("health monitor: staging mount for volume %s at %s is slow (health check timed out, %d consecutive over %v); not recovering", volumeID, vol.StagedPath, streak, unanswered.Round(time.Second))
+			glog.Warningf("health monitor: staging mount for volume %s at %s is slow (health check timed out, %d consecutive, probe unanswered for %v); not recovering", volumeID, vol.StagedPath, streak, unanswered.Round(time.Second))
 			return
 		}
-		msg := fmt.Sprintf("staging mount %s has not answered %d consecutive health checks over %v, longer than weed mount takes to answer any request; treating it as dead", vol.StagedPath, streak, unanswered.Round(time.Second))
+		msg := fmt.Sprintf("staging mount %s has left a health probe unanswered for %v across %d consecutive health checks, longer than weed mount takes to answer any request; treating it as dead", vol.StagedPath, unanswered.Round(time.Second), streak)
 		vol.setAbnormal(msg)
 		glog.Errorf("health monitor: volume %s: %s", volumeID, msg)
 		ns.recoverHungVolume(volumeID)
 		return
 	case healthDead:
-		vol.noteUnhealthy(probeStart)
+		vol.noteUnhealthy()
 		n := vol.healthFailCount.Add(1)
 		if n < defaultUnhealthyThreshold {
 			glog.Warningf("health monitor: staging mount for volume %s failed check %d/%d at %s", volumeID, n, defaultUnhealthyThreshold, vol.StagedPath)
@@ -271,13 +300,13 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 // isDeadMount reports whether path is a mount whose daemon is dead. The
 // probe is bounded like checkHealth and deduplicated per path: a timeout
 // is inconclusive — a live but hung mount — which must not be detached
-// and removed underneath containers unless hung already established that
-// the mount has been unanswered past the request bound of weed mount.
-func isDeadMount(path string, hung bool) bool {
+// and removed underneath containers unless the probe has been left
+// unanswered longer than hungAfter, which zero disables.
+func isDeadMount(path string, hungAfter time.Duration) bool {
 	err, probed := probeStatfs(path)
 	if !probed {
-		if hung {
-			glog.Warningf("health monitor: statfs probe for %s timed out again; the mount is hung", path)
+		if unanswered := statfsProbeUnanswered(path); hungAfter > 0 && unanswered > hungAfter {
+			glog.Warningf("health monitor: statfs probe for %s unanswered for %v; the mount is hung", path, unanswered.Round(time.Second))
 			return true
 		}
 		glog.Warningf("health monitor: statfs probe for %s timed out, treating the mount as live", path)
@@ -395,8 +424,15 @@ func (ns *NodeServer) recoverHungVolume(volumeID string) {
 }
 
 func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
-	confirmed := func(r healthResult) bool {
-		return r == healthDead || (hung && r == healthSlow)
+	var hungAfter time.Duration
+	if hung {
+		hungAfter = ns.hungAfter()
+	}
+	// recheck probes path again: a dead mount stays confirmed, and a hung
+	// one while its probe stays unanswered past hungAfter.
+	recheck := func(path string) (healthResult, bool) {
+		r, unanswered := ns.checkHealthUnanswered(path)
+		return r, r == healthDead || (hungAfter > 0 && r == healthSlow && unanswered > hungAfter)
 	}
 	volumeMutex := ns.getVolumeMutex(volumeID)
 	volumeMutex.Lock()
@@ -417,7 +453,7 @@ func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
 	// dead), abort — tearing down a live mount here is precisely what
 	// gives a running pod "Transport endpoint is not connected". A mount
 	// already established as hung stays confirmed while it stays slow.
-	if r := ns.checkHealth(vol.StagedPath); !confirmed(r) {
+	if r, confirmed := recheck(vol.StagedPath); !confirmed {
 		glog.Infof("health monitor: volume %s no longer confirmed dead (state=%s), skipping recovery", volumeID, r)
 		return
 	}
@@ -468,8 +504,23 @@ func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
 	// Step 1: Manager-level unmount. cleanupStagingFn only does a host
 	// unmount + RemoveAll, leaving the manager thinking the volume is
 	// still mounted, so the follow-up Mount would no-op onto a dead path.
-	if vol.unmounter != nil {
-		if err := vol.unmounter.Unmount(); err != nil {
+	// A hung mount's weed process is still alive, so a volume rebuilt
+	// without an unmounter asks the mount service to stop it by volume ID.
+	unmounter := vol.unmounter
+	if unmounter == nil && hung {
+		if ns.volumeUnmounterFn == nil {
+			glog.Errorf("health monitor: no mount service client to stop the hung mount of volume %s, aborting recovery", volumeID)
+			return
+		}
+		u, err := ns.volumeUnmounterFn(volumeID)
+		if err != nil {
+			glog.Errorf("health monitor: cannot reach the mount service to stop the hung mount of volume %s, aborting recovery: %v", volumeID, err)
+			return
+		}
+		unmounter = u
+	}
+	if unmounter != nil {
+		if err := unmounter.Unmount(); err != nil {
 			// Aborting is safer than continuing: RemoveAll on a path the
 			// manager still considers mounted risks deleting user data
 			// through a live FUSE.
@@ -486,7 +537,7 @@ func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
 	// happens with a non-nil unmounter retained by the still-running CSI
 	// plugin. Re-check after the RPC, then detach the confirmed-dead artifact
 	// in either case. Never detach a mount that became healthy or merely slow.
-	if r := ns.checkHealth(stagingPath); !confirmed(r) {
+	if r, confirmed := recheck(stagingPath); !confirmed {
 		glog.Infof("health monitor: staging mount for volume %s no longer confirmed dead after manager unmount (state=%s), aborting recovery", volumeID, r)
 		return
 	}
@@ -497,7 +548,7 @@ func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
 	// mounted path only when statfs proves it dead; a mount that answers
 	// statfs, or whose probe timed out, may still serve I/O.
 	if notMnt, err := isLikelyNotMountPointFn(stagingPath); err == nil && !notMnt {
-		if !isDeadMount(stagingPath, hung) {
+		if !isDeadMount(stagingPath, hungAfter) {
 			glog.Errorf("health monitor: refusing to clean up staging path %s for volume %s — still a mount point; aborting recovery to avoid data deletion", stagingPath, volumeID)
 			return
 		}

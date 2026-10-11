@@ -6,7 +6,6 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/seaweedfs/seaweedfs-csi-driver/pkg/mountmanager"
 	"github.com/seaweedfs/seaweedfs/weed/glog"
@@ -33,11 +32,8 @@ type Volume struct {
 	// fires only at defaultUnhealthyThreshold (one slow check under IO
 	// load must not tear down a live mount).
 	healthFailCount atomic.Int32
-	// unhealthyStreak counts consecutive dead or timed-out health checks
-	// and unhealthySince (unix nanoseconds) records when the first of them
-	// started, so a mount that never answers is told apart from a busy one.
+	// unhealthyStreak counts consecutive dead or timed-out health checks.
 	unhealthyStreak atomic.Int32
-	unhealthySince  atomic.Int64
 	// abnormal is the message NodeGetVolumeStats reports while the mount
 	// is persistently dead or unresponsive; nil while it is not.
 	abnormal     atomic.Pointer[string]
@@ -143,18 +139,15 @@ func (vol *Volume) Unpublish(targetPath string) error {
 	return nil
 }
 
-// noteUnhealthy records one dead or timed-out health check whose probe
-// started at start. It returns the length of the current streak and when
-// its first probe started.
-func (vol *Volume) noteUnhealthy(start time.Time) (int32, time.Time) {
-	vol.unhealthySince.CompareAndSwap(0, start.UnixNano())
-	return vol.unhealthyStreak.Add(1), time.Unix(0, vol.unhealthySince.Load())
+// noteUnhealthy records one dead or timed-out health check and returns
+// the length of the current streak.
+func (vol *Volume) noteUnhealthy() int32 {
+	return vol.unhealthyStreak.Add(1)
 }
 
 // noteHealthy ends an unhealthy streak after a check the mount answered.
 func (vol *Volume) noteHealthy() {
 	vol.unhealthyStreak.Store(0)
-	vol.unhealthySince.Store(0)
 	vol.abnormal.Store(nil)
 }
 

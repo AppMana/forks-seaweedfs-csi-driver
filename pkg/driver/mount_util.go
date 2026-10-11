@@ -19,8 +19,9 @@ var statfsProbeTimeout = defaultHealthCheckTimeout
 // another syscall goroutine, so a permanently hung daemon cannot
 // accumulate one blocked goroutine per sweep or CSI retry.
 type statfsProbe struct {
-	done chan struct{}
-	err  error
+	start time.Time
+	done  chan struct{}
+	err   error
 }
 
 var statfsProbes sync.Map // map[string]*statfsProbe
@@ -36,7 +37,7 @@ var statfsProbes sync.Map // map[string]*statfsProbe
 // the in-flight result describes the old mount and must not be reused
 // for the new one.
 func probeStatfs(path string) (error, bool) {
-	p, loaded := statfsProbes.LoadOrStore(path, &statfsProbe{done: make(chan struct{})})
+	p, loaded := statfsProbes.LoadOrStore(path, &statfsProbe{start: time.Now(), done: make(chan struct{})})
 	probe := p.(*statfsProbe)
 	if !loaded {
 		go func() {
@@ -61,9 +62,27 @@ func probeStatfs(path string) (error, bool) {
 	}
 }
 
-// resetStatfsProbe forgets an in-flight probe for path after the mount
-// there was detached or replaced. The orphaned goroutine still exits on
-// its own when the syscall returns; it just stops absorbing new callers.
+// resetStatfsProbe forgets the in-flight statfs and health probes for
+// path after the mount there was detached or replaced. The orphaned
+// goroutines still exit on their own when the syscall returns; they just
+// stop absorbing new callers.
 func resetStatfsProbe(path string) {
 	statfsProbes.Delete(path)
+	healthProbes.Delete(path)
+}
+
+// statfsProbeUnanswered returns how long the statfs probe in flight for
+// path has gone unanswered, or zero when none is in flight.
+func statfsProbeUnanswered(path string) time.Duration {
+	p, ok := statfsProbes.Load(path)
+	if !ok {
+		return 0
+	}
+	probe := p.(*statfsProbe)
+	select {
+	case <-probe.done:
+		return 0
+	default:
+		return time.Since(probe.start)
+	}
 }

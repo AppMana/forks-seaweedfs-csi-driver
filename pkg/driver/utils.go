@@ -36,6 +36,13 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 		detachStagingFn:  detachDeadMountPoint,
 		unmountFn:        unmountVolume,
 		bindMountFn:      defaultBindMount,
+		volumeUnmounterFn: func(volumeID string) (Unmounter, error) {
+			client, err := mountmanager.NewClient(n.mountEndpoint)
+			if err != nil {
+				return nil, err
+			}
+			return &mountServiceUnmounter{client: client, volumeID: volumeID}, nil
+		},
 	}
 	ns.recoverStagedVolumesFromDisk(n.StagingScanDir)
 	ns.removeOrphanCacheDirs()

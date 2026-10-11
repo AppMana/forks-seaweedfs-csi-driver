@@ -5,7 +5,9 @@ package driver
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,4 +153,114 @@ func TestNodeGetVolumeStatsReportsVolumeCondition(t *testing.T) {
 	if !c.GetAbnormal() || c.GetMessage() == "" {
 		t.Fatalf("persistently dead volume condition = %v, want abnormal with a message", c)
 	}
+}
+
+// A mount that answers every probe, later than the check timeout but
+// within the request bound of weed mount, is busy, not hung, however many
+// consecutive checks time out. Each sweep here starts after the previous
+// probe answered, as production sweeps do: a check that times out at 30 s
+// still holds its slot when the next 30 s tick fires, so that tick is
+// skipped and the following check issues a fresh probe.
+func TestHealthMonitorDoesNotFlagMountAnsweringWithinRequestBound(t *testing.T) {
+	state := newFakeMountState()
+	ns := newNodeServerWithFakes(t, state)
+	ns.healthCheckTimeout = 20 * time.Millisecond
+	ns.hungMountAfter = 60 * time.Millisecond
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	volCtx := map[string]string{"collection": "c"}
+	vol, err := ns.stageNewVolume("vol-1", stagingPath, volCtx, false)
+	if err != nil {
+		t.Fatalf("stageNewVolume: %v", err)
+	}
+	vol.volContext = volCtx
+	ns.volumes.Store("vol-1", vol)
+	answered := make(chan struct{}, 64)
+	ns.isHealthyFn = func(path string) bool {
+		if path == stagingPath {
+			time.Sleep(30 * time.Millisecond)
+			answered <- struct{}{}
+		}
+		return true
+	}
+
+	for i := 0; i < 3*defaultUnhealthyThreshold; i++ {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+		<-answered
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.unstageCalls != 0 || state.stageCalls != 1 {
+		t.Errorf("mount answering within the request bound was torn down: unstage=%d stage=%d", state.unstageCalls, state.stageCalls)
+	}
+	if message, abnormal := vol.abnormalMessage(); abnormal {
+		t.Errorf("mount answering within the request bound reported abnormal: %s", message)
+	}
+}
+
+// A volume rebuilt after a node-plugin restart has no unmounter, yet the
+// mount service still runs its hung weed mount. Recovery must stop that
+// process: otherwise the service answers the re-stage with "already
+// mounted" and pods are re-bound onto the bare staging directory.
+func TestHealthMonitorStopsHungMountOfRebuiltVolume(t *testing.T) {
+	state := newFakeMountState()
+	state.modelService = true
+	state.serving = true
+	ns := newNodeServerWithFakes(t, state)
+	ns.healthCheckTimeout = 20 * time.Millisecond
+	ns.hungMountAfter = 50 * time.Millisecond
+	stagingPath := filepath.Join(t.TempDir(), "staging")
+	if err := os.MkdirAll(stagingPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	vol := ns.rebuildVolumeFromStaging("vol-1", stagingPath)
+	vol.volContext = map[string]string{}
+	ns.volumes.Store("vol-1", vol)
+	// The hung weed mount answers nothing until it is stopped; its FUSE
+	// connection then fails every request.
+	stopped := make(chan struct{})
+	var stopOnce sync.Once
+	t.Cleanup(func() { stopOnce.Do(func() { close(stopped) }) })
+	ns.volumeUnmounterFn = func(string) (Unmounter, error) {
+		return stopUnmounter{state: state, stop: func() { stopOnce.Do(func() { close(stopped) }) }}, nil
+	}
+	ns.isHealthyFn = func(path string) bool {
+		<-stopped
+		return false
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ns.checkAndRecoverVolumes()
+		ns.recoveryWg.Wait()
+		state.mu.Lock()
+		done := state.detachCalls > 0
+		state.mu.Unlock()
+		if done {
+			break
+		}
+	}
+
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.detachCalls != 1 {
+		t.Fatalf("hung mount was not recovered: detach=%d", state.detachCalls)
+	}
+	if state.unstageCalls != 1 || state.stageCalls != 1 {
+		t.Errorf("hung weed mount kept serving through recovery: unstage=%d fresh mounts=%d", state.unstageCalls, state.stageCalls)
+	}
+}
+
+type stopUnmounter struct {
+	state *fakeMountState
+	stop  func()
+}
+
+func (u stopUnmounter) Unmount() error {
+	if err := (&stateUnmounter{state: u.state}).Unmount(); err != nil {
+		return err
+	}
+	u.stop()
+	return nil
 }
