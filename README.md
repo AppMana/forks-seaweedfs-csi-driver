@@ -1,9 +1,106 @@
-# forks-seaweedfs-csi-driver — SeaweedFS CSI with Windows node support
+# SeaweedFS CSI driver fork: Windows nodes and recoverable mounts
 
-AppMana fork of [seaweedfs/seaweedfs-csi-driver](https://github.com/seaweedfs/seaweedfs-csi-driver)
-(v1.4.12). It makes `seaweedfs-storage` PersistentVolumes mount on **Windows**
-Kubernetes nodes: the same StorageClass and driver serve Linux and Windows
-pods, including cross-OS ReadWriteMany.
+Fork of [seaweedfs/seaweedfs-csi-driver](https://github.com/seaweedfs/seaweedfs-csi-driver)
+(v1.4.12). The same driver and StorageClass serve Linux and **Windows**
+Kubernetes nodes, including cross-OS ReadWriteMany, and node mounts survive
+plugin and mount-daemon restarts. The `weed` binary inside the mount image
+comes from [forks-seaweedfs](https://github.com/AppMana/forks-seaweedfs),
+whose README describes the mount's own fixes, flags and benchmarks.
+
+## What the fork changes
+
+- **Windows nodes**: HostProcess node plugin and mount supervisor running
+  WinFsp `weed.exe mount` in network-FS mode (details below).
+- **Restart recovery**: the node plugin rediscovers staged volumes from
+  kubelet's `vol_data.json` (`--stagingScanDir`), including pod publish paths
+  of statically provisioned volumes (matched by volume handle), and its health
+  monitor remounts dead FUSE mounts and re-binds them inside running
+  containers without deleting pods. Stage and Publish succeed only on a
+  healthy mount; a slow probe is never treated as dead.
+- **Cache directories**: node startup removes only cache directories whose
+  volume is neither staged nor served by a running mount, instead of emptying
+  the whole cache base under live mounts.
+- **Write buffer cap**: `--writeBufferSizeMB` caps every mount's dirty data,
+  so `close()` and `fsync()` drain within the mount's request deadline.
+- **Per-volume mount options** from StorageClass parameters or static PV
+  `volumeAttributes` (table below), including WinFsp cache tuning and
+  `readerCacheMode`.
+- Volume buckets are created so that their empty directories are kept.
+
+## Configuration
+
+Node plugin flags set the default for every mount on the node:
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--cacheDir` | system temp | Base of per-volume cache directories, `<cacheDir>/<sha256 of volume id>`. |
+| `--cacheCapacityMB` | 0 | Each mount's on-disk read cache (`weed mount -cacheCapacityMB`); `0` disables it. |
+| `--writeBufferSizeMB` | 0 (no cap) | Each mount's dirty-data cap, memory plus swap. |
+| `--concurrentWriters`, `--concurrentReaders` | 128 | Upload and chunk-fetch concurrency per mount. |
+| `--cacheMetaTtlSec` | 60 | Metadata cache TTL. |
+| `--stagingScanDir` | empty | Kubelet `plugins/kubernetes.io/csi` directory to scan for staged volumes at startup. Keep it set. |
+
+A StorageClass parameter, or a static PV's `volumeAttributes`, overrides the
+node default for that volume: `cacheCapacityMB`, `writeBufferSizeMB`,
+`cacheMetaTtlSec`, `concurrentReaders`, `concurrentWriters`, `readerCacheMode`,
+`winfspOptions`, `replication`, `collection`, `diskType`, `dataCenter`,
+`dataLocality`, `ttl`, `chunkSizeLimitMB`, `volumeServerAccess`,
+`readRetryTime`, `uidMap`, `gidMap` and `path`. Unknown keys are logged and
+ignored. A dynamically provisioned PV records its StorageClass parameters when
+it is created, and PV volume attributes are immutable: changing a
+StorageClass affects only volumes provisioned afterwards.
+
+Request deadlines are the mount's own (`weed mount` defaults): every FUSE
+request is answered within 60 s, the kernel aborts a connection unanswered
+for 90 s (Linux 6.14+), and chunk uploads and filer calls are bounded. A
+mount's disk use is at most its `cacheCapacityMB` plus `writeBufferSizeMB`
+in its current cache directory; size them against the node's root disk and
+the number of volumes it mounts.
+
+Measured with the fork's mount: a 4 GiB write with a 512 MiB cap on a 1 GbE
+node takes 80.4 s to write and 8.8 s to `close()` (46 MB/s); 256 MiB at
+16 MiB/s closes in 15.7 s uncapped and 1.35 s with a 32 MiB cap.
+
+## Images and CI
+
+`build-images.yml` runs on pushes and pull requests to the default branch and
+`merge/**`: race unit tests, native Windows tests, then Linux and Windows
+(ltsc2022) images for `ghcr.io/appmana/seaweedfs-csi-driver` and
+`ghcr.io/appmana/seaweedfs-mount`, published as multi-platform manifests
+tagged `candidate-<sha>-<run>-<attempt>`. `SEAWEEDFS_COMMIT` (Linux) and
+`SEAWEEDFS_WINDOWS_COMMIT` select the forks-seaweedfs source; the Linux
+mount Dockerfiles must carry the same pin, and
+`test/kubernetes_lab/build_pins_test.go` requires that, a static
+(`CGO_ENABLED=0`) large-disk (`5BytesOffset`) build and a stamped
+`weed version`. Deploy candidates by digest after qualification; never
+rebuild or retag a deployed image.
+
+The bundled `weed`/`weed.exe` binaries are the large-disk build (5-byte
+needle offsets for 8 TB volume files), matching servers that run
+`*_large_disk` images.
+
+## Qualification
+
+```sh
+go test -race -count=1 ./...                      # unit, as CI runs it
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...   # Windows cross-compile
+test/kubernetes_lab/run.sh                        # mixed Linux and Windows Labcontainers cluster
+```
+
+The Kubernetes lab qualifies digest-pinned images in disposable VMs:
+`CSI_QUALIFICATION_MODE=recovery` runs the restart, remount, reboot and
+crash-recovery scenarios, the default `full` mode the complete native Windows
+suite (see below). The mount binary's own gates (unit, `test/fuse_integration`,
+`test/storage_lab` VM gates) run in forks-seaweedfs.
+
+## Branches
+
+`appmana/windows-v1.4.12` is the default branch and the source of deployed
+images; it advances by fast-forward or merge from `merge/**` branches once
+their images are qualified. `merge/upstream-csi-master` carries the next
+upstream merge.
+
+## Windows nodes
 
 How it works on Windows:
 
@@ -42,17 +139,6 @@ and mixed-OS pod workloads. This qualification belongs in the isolated
 Labcontainers Kubernetes harness, not on drained production nodes.
 DLL-only substitution cannot deploy a kernel
 fix. Keep test signing disabled on cluster hosts.
-
-**Large volumes:** the bundled `weed.exe`/`weed` binaries are the large-disk
-build (`-tags 5BytesOffset`, 5-byte needle offsets for 8TB volume files),
-matching clusters that run the upstream `*_large_disk` images.
-
-Images (multi-OS manifest lists, `linux/amd64` + `windows/amd64` ltsc2022):
-
-```
-ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.5
-ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
-```
 
 To package already-tested executables without rebuilding them, run on the
 Linux lab host:
@@ -155,7 +241,7 @@ spec:
       serviceAccountName: seaweedfs-node-sa
       initContainers:
         - name: install-winfsp
-          image: ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
+          image: ghcr.io/appmana/seaweedfs-mount@sha256:<qualified digest>
           command: ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
           args:
             - >-
@@ -166,7 +252,7 @@ spec:
               New-Item -ItemType Directory -Force -Path C:\var\lib\seaweedfs-mount, C:\var\cache\seaweedfs | Out-Null
       containers:
         - name: seaweedfs-mount
-          image: ghcr.io/appmana/seaweedfs-mount:v1.4.12-appmana.post.5
+          image: ghcr.io/appmana/seaweedfs-mount@sha256:<qualified digest>
           command: ["$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-mount.exe"]
           args: ["--endpoint=unix://C:\\var\\lib\\seaweedfs-mount\\seaweedfs-mount.sock"]
 ---
@@ -190,7 +276,7 @@ spec:
       serviceAccountName: seaweedfs-node-sa
       containers:
         - name: csi-seaweedfs-plugin
-          image: ghcr.io/appmana/seaweedfs-csi-driver:v1.4.12-appmana.post.5
+          image: ghcr.io/appmana/seaweedfs-csi-driver@sha256:<qualified digest>
           command: ["$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-csi-driver.exe"]
           args:
             - --endpoint=unix://C:\var\lib\kubelet\plugins\seaweedfs-csi-driver\csi.sock
