@@ -1,7 +1,7 @@
 # SEAWEEDFS_COMMIT matches the build workflow; go.mod is the CSI API dependency.
 # Update via: docker build --build-arg SEAWEEDFS_COMMIT=<hash> ...
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=745f6dc7d9930743ee9d0760c19f61d1ebc3e26b
+ARG SEAWEEDFS_COMMIT=e7a60962653315b3c25aee65238030d06d7d18da
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=6ead27e20708423a00718812de796241659ad387
@@ -10,7 +10,7 @@ ARG PAYLOAD_STAGE=builder
 # Stay on the native build platform and cross-compile from there. Running the
 # toolchain under QEMU for every target architecture is slow and makes the git
 # clone below fail with "cannot pread pack file: Bad address".
-FROM --platform=$BUILDPLATFORM golang:1.26.0-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.6-alpine AS builder
 
 RUN apk add git
 

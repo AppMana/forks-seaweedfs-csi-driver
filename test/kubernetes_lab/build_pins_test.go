@@ -33,7 +33,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 	}
 	workflow := read(".github/workflows/build-images.yml")
 	pins := map[string]string{
-		"SEAWEEDFS_COMMIT":         "745f6dc7d9930743ee9d0760c19f61d1ebc3e26b",
+		"SEAWEEDFS_COMMIT":         "e7a60962653315b3c25aee65238030d06d7d18da",
 		"SEAWEEDFS_WINDOWS_COMMIT": "4cc1474e2b287245f53c9fa5e2c94822e09ce5a7",
 	}
 	for key, want := range pins {
@@ -49,11 +49,15 @@ func TestMountBuildPinsAgree(t *testing.T) {
 		t.Run(file, func(t *testing.T) {
 			source := read("cmd/seaweedfs-mount/" + file)
 			pin := pins["SEAWEEDFS_COMMIT"]
+			// The builder must satisfy the go directive of the weed source it
+			// builds; the golang images run with GOTOOLCHAIN=local.
+			builder := "golang:1.26.6-alpine"
 			if file == "Dockerfile.Windows" {
 				pin = pins["SEAWEEDFS_WINDOWS_COMMIT"]
+				builder = "golang:1.26.0"
 			}
 			for _, required := range []string{
-				"golang:1.26.0",
+				builder,
 				"ARG SEAWEEDFS_COMMIT=" + pin,
 				"ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs",
 				"ARG GO_FUSE_COMMIT=6ead27e20708423a00718812de796241659ad387",
