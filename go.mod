@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/seaweedfs/go-fuse/v2 v2.9.3
 	github.com/seaweedfs/seaweedfs v0.0.0-20260719061107-eb6d8ebd5f68
 	golang.org/x/sys v0.48.0
 	google.golang.org/protobuf v1.36.12
