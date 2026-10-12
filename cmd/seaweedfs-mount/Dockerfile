@@ -1,7 +1,7 @@
 # SEAWEEDFS_COMMIT matches the build workflow; go.mod is the CSI API dependency.
 # Update via: docker build --build-arg SEAWEEDFS_COMMIT=<hash> ...
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=1f10d72c728c8fae2fa9b758e67f63dcc1f86b77
+ARG SEAWEEDFS_COMMIT=e3a6125a3848b121add4624383894559886aebec
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=6ead27e20708423a00718812de796241659ad387
