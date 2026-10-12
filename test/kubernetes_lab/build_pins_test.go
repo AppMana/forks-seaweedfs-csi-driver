@@ -33,7 +33,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 	}
 	workflow := read(".github/workflows/build-images.yml")
 	pins := map[string]string{
-		"SEAWEEDFS_COMMIT":         "e3a6125a3848b121add4624383894559886aebec",
+		"SEAWEEDFS_COMMIT":         "745f6dc7d9930743ee9d0760c19f61d1ebc3e26b",
 		"SEAWEEDFS_WINDOWS_COMMIT": "4cc1474e2b287245f53c9fa5e2c94822e09ce5a7",
 	}
 	for key, want := range pins {
