@@ -37,6 +37,11 @@ var statfsProbes sync.Map // map[string]*statfsProbe
 // the in-flight result describes the old mount and must not be reused
 // for the new one.
 func probeStatfs(path string) (error, bool) {
+	return probeStatfsWithin(path, statfsProbeTimeout)
+}
+
+// probeStatfsWithin is probeStatfs with its own bound on the wait.
+func probeStatfsWithin(path string, wait time.Duration) (error, bool) {
 	p, loaded := statfsProbes.LoadOrStore(path, &statfsProbe{start: time.Now(), done: make(chan struct{})})
 	probe := p.(*statfsProbe)
 	if !loaded {
@@ -57,7 +62,7 @@ func probeStatfs(path string) (error, bool) {
 	select {
 	case <-probe.done:
 		return probe.err, true
-	case <-time.After(statfsProbeTimeout):
+	case <-time.After(wait):
 		return nil, false
 	}
 }

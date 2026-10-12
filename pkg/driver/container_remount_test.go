@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -292,4 +293,64 @@ func TestRecoverVolumeCallsContainerRemount(t *testing.T) {
 	// Container remount would have been called but found no matching
 	// containers (test environment). The important thing is that the
 	// code path didn't panic.
+}
+
+// The container repair finds a container's mounts of a volume by mount
+// source and keeps a read-only mount read-only, so both fields must parse.
+func TestParseMountInfoReaderCapturesSourceAndOptions(t *testing.T) {
+	content := `1117 11439 0:74 / /data ro,nosuid,nodev,relatime shared:524 - fuse.seaweedfs seaweedfs-filer.seaweedfs:8888:/buckets/pvc-5f55c744 rw,user_id=0,group_id=0,allow_other
+1118 11439 0:75 / /cache rw,relatime - fuse.seaweedfs seaweedfs-filer.seaweedfs:8888:/buckets/pvc-46ca9fc1 rw,user_id=0,group_id=0
+`
+	entries, err := parseMountInfoReader(strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("parseMountInfoReader: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(entries))
+	}
+	if got := entries[0].source; got != "seaweedfs-filer.seaweedfs:8888:/buckets/pvc-5f55c744" {
+		t.Errorf("source = %q", got)
+	}
+	if !entries[0].readOnly() {
+		t.Errorf("options %q: want read-only", entries[0].options)
+	}
+	if entries[1].readOnly() {
+		t.Errorf("options %q: want read-write", entries[1].options)
+	}
+}
+
+func TestSameFuseFilesystem(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want bool
+	}{
+		{"filer:8888:/buckets/pvc-a", "filer:8888:/buckets/pvc-a", true},
+		// The filer path names the volume even when the filer list changed.
+		{"filer-0:8888,filer-1:8888:/buckets/pvc-a", "filer:8888:/buckets/pvc-a", true},
+		// Another volume of the same pod is never the staged filesystem.
+		{"filer:8888:/buckets/pvc-a", "filer:8888:/buckets/pvc-b", false},
+		{"filer:8888:/buckets/pvc-a", "filer:8888:/buckets/pvc-a/sub", false},
+		{"", "", false},
+		{"seaweedfs", "seaweedfs-other", false},
+	}
+	for _, tt := range tests {
+		if got := sameFuseFilesystem(tt.a, tt.b); got != tt.want {
+			t.Errorf("sameFuseFilesystem(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+// A live daemon can fail a request with EIO; only a gone connection is
+// proof that the mount is dead.
+func TestIsStaleMountOnlyForGoneConnections(t *testing.T) {
+	for errno, want := range map[syscall.Errno]bool{
+		syscall.ENOTCONN:     true,
+		syscall.ECONNABORTED: true,
+		syscall.EIO:          false,
+		syscall.EACCES:       false,
+	} {
+		if got := isStaleMount(&os.PathError{Op: "statfs", Path: "/data", Err: errno}); got != want {
+			t.Errorf("isStaleMount(%v) = %v, want %v", errno, got, want)
+		}
+	}
 }

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
 	"golang.org/x/sys/unix"
@@ -59,7 +60,7 @@ func remountInContainers(publishPath, stagingPath, oldDevice string, readOnly bo
 
 		for _, m := range mounts {
 			glog.Infof("container remount: fixing stale mount %s (subPath %q) in container PID %d (pod %s)", m.mountpoint, m.root, pid, podUID)
-			if err := remountViaSetns(pid, m.mountpoint, stagingPath, m.root, readOnly); err != nil {
+			if err := remountViaSetns(pid, m.mountpoint, stagingPath, m.root, readOnly || m.readOnly()); err != nil {
 				glog.Warningf("container remount: failed to remount %s in PID %d: %v", m.mountpoint, pid, err)
 			} else {
 				glog.Infof("container remount: successfully remounted %s in PID %d", m.mountpoint, pid)
@@ -68,70 +69,116 @@ func remountInContainers(publishPath, stagingPath, oldDevice string, readOnly bo
 	}
 }
 
-// remountStaleFuseInContainers is a scan-based variant used by
-// retryPublishPaths where the old device is unknown. It enters each
-// affected container, finds FUSE mounts that are stale (ENOTCONN)
-// AND whose device matches the staging path's current device, and
-// replaces them with a fresh bind from stagingPath.
+// containerMountProbeWait bounds the statfs probe of a container's FUSE
+// mount. A mount whose daemon is gone answers ENOTCONN at once; one that
+// does not answer within this wait is not proven dead and is left alone.
+const containerMountProbeWait = 5 * time.Second
+
+// repairStaleContainerMounts replaces, in every container of the pod that
+// owns publishPath, each mount of the staged filesystem whose FUSE daemon is
+// gone with a fresh bind of the live staging mount, and returns how many it
+// replaced.
 //
-// Only mounts with the same device as stagingPath are touched. This
-// prevents accidentally overwriting other SeaweedFS volumes mounted
-// in the same pod.
-func remountStaleFuseInContainers(publishPath, stagingPath string, readOnly bool) {
+// It is level-triggered: it compares what each container holds now with
+// the staging mount, so it repairs a container no matter which event left
+// it on a dead mount. remountInContainers only finds container mounts by the
+// device of the staging mount a recovery replaces. A container whose mount
+// is older than that one, because kubelet unstaged and re-staged the volume
+// under the running pod or because a recovery could not reach it, is never
+// on that device, and stays on its dead mount through every later recovery.
+//
+// A container mount belongs to the staged filesystem when its mount source
+// names the same filer path. Only a mount on another device whose statfs
+// fails with a dead-connection errno is replaced, so the live mount, another
+// volume's mounts and a mount that is merely slow are never touched.
+func repairStaleContainerMounts(publishPath, stagingPath string) int {
 	podUID := extractPodUID(publishPath)
 	if podUID == "" {
-		return
+		return 0
 	}
-
+	staging, err := mountEntryAt(os.Getpid(), stagingPath)
+	if err != nil || !isFuseFS(staging.fstype) {
+		glog.V(4).Infof("container repair: staging path %s is not a FUSE mount (%v)", stagingPath, err)
+		return 0
+	}
 	pids, err := findContainerPIDsForPod(podUID)
-	if err != nil || len(pids) == 0 {
-		return
-	}
-
-	// Get the device of the current (recovered) staging mount so we
-	// only touch container mounts that belong to this volume.
-	stagingDevice, err := getMountDevice(stagingPath)
 	if err != nil {
-		glog.V(4).Infof("container remount: cannot determine staging device for %s: %v", stagingPath, err)
-		return
+		glog.Warningf("container repair: cannot list containers of pod %s (hostPID may not be enabled): %v", podUID, err)
+		return 0
 	}
-
+	repaired := 0
 	for _, pid := range pids {
 		entries, err := parseMountInfo(pid)
 		if err != nil {
 			continue
 		}
 		for _, e := range entries {
-			if !isFuseFS(e.fstype) {
+			if !isFuseFS(e.fstype) || e.device == staging.device || !sameFuseFilesystem(e.source, staging.source) {
 				continue
 			}
-			// Only touch mounts whose device matches the recovered
-			// staging path. In retryPublishPaths the staging is alive,
-			// so in the normal case the container's mount (if healthy)
-			// already has the same device and isStaleMount returns
-			// false. If the staging was previously re-created with a
-			// new device (from a prior recoverVolume), the container
-			// mount has a different (dead) device.
-			if e.device == stagingDevice {
-				// Same device as the live staging -- container mount
-				// is already healthy.
-				continue
-			}
-			// Check accessibility via /proc/<pid>/root/<mountpoint>.
 			checkPath := fmt.Sprintf("/proc/%d/root%s", pid, e.mountpoint)
-			_, statErr := os.Stat(checkPath)
+			statErr, answered := probeStatfsWithin(checkPath, containerMountProbeWait)
+			if !answered {
+				glog.Warningf("container repair: %s in container PID %d (pod %s) is an older mount of %s that does not answer statfs; leaving it", e.mountpoint, pid, podUID, staging.source)
+				continue
+			}
 			if !isStaleMount(statErr) {
 				continue
 			}
-
-			glog.Infof("container remount: fixing stale mount %s (subPath %q) in container PID %d (pod %s)", e.mountpoint, e.root, pid, podUID)
+			readOnly := e.readOnly()
+			glog.Warningf("container repair: %s (subPath %q) in container PID %d (pod %s) is on dead mount %s of %s; binding live staging mount %s", e.mountpoint, e.root, pid, podUID, e.device, staging.source, staging.device)
 			if err := remountViaSetns(pid, e.mountpoint, stagingPath, e.root, readOnly); err != nil {
-				glog.Warningf("container remount: failed to remount %s in PID %d: %v", e.mountpoint, pid, err)
-			} else {
-				glog.Infof("container remount: successfully remounted %s in PID %d", e.mountpoint, pid)
+				glog.Errorf("container repair: failed to remount %s in PID %d (pod %s): %v", e.mountpoint, pid, podUID, err)
+				continue
 			}
+			resetStatfsProbe(checkPath)
+			repaired++
+			glog.Infof("container repair: remounted %s in PID %d (pod %s)", e.mountpoint, pid, podUID)
 		}
 	}
+	return repaired
+}
+
+// sameFuseFilesystem reports whether two FUSE mount sources name the same
+// filesystem. weed mount's source is "<filer addresses>:<filer path>"; the
+// filer path identifies the volume even when the filer addresses differ.
+func sameFuseFilesystem(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if a == b {
+		return true
+	}
+	pa, pb := fuseSourcePath(a), fuseSourcePath(b)
+	return pa != "" && pa == pb
+}
+
+// fuseSourcePath returns the filer path of a weed mount source, or "".
+func fuseSourcePath(source string) string {
+	if i := strings.Index(source, ":/"); i >= 0 {
+		return source[i+1:]
+	}
+	return ""
+}
+
+// mountEntryAt returns the topmost mount at path in the mount namespace of
+// pid.
+func mountEntryAt(pid int, path string) (mountInfoEntry, error) {
+	entries, err := parseMountInfo(pid)
+	if err != nil {
+		return mountInfoEntry{}, err
+	}
+	var top mountInfoEntry
+	found := false
+	for _, e := range entries {
+		if e.mountpoint == path {
+			top, found = e, true
+		}
+	}
+	if !found {
+		return mountInfoEntry{}, fmt.Errorf("no mount at %s", path)
+	}
+	return top, nil
 }
 
 // extractPodUID extracts the pod UID from a CSI publish path.
@@ -214,7 +261,22 @@ type mountInfoEntry struct {
 	// subPath mount pointing at <staging>/<subPath> after a remount.
 	root       string
 	mountpoint string
-	fstype     string
+	// options are the per-mount options (mountinfo field 6), e.g. "ro".
+	options string
+	fstype  string
+	// source is the filesystem's mount source, for weed mount
+	// "<filer addresses>:<filer path>".
+	source string
+}
+
+// readOnly reports whether the mount itself is read-only.
+func (e mountInfoEntry) readOnly() bool {
+	for _, o := range strings.Split(e.options, ",") {
+		if o == "ro" {
+			return true
+		}
+	}
+	return false
 }
 
 // parseMountInfo parses /proc/<pid>/mountinfo and returns entries.
@@ -254,16 +316,21 @@ func parseMountInfoReader(r io.Reader) ([]mountInfoEntry, error) {
 				break
 			}
 		}
-		var fstype string
+		var fstype, source string
 		if sepIdx >= 0 && sepIdx+1 < len(fields) {
 			fstype = fields[sepIdx+1]
+		}
+		if sepIdx >= 0 && sepIdx+2 < len(fields) {
+			source = fields[sepIdx+2]
 		}
 
 		entries = append(entries, mountInfoEntry{
 			device:     device,
 			root:       root,
 			mountpoint: mountpoint,
+			options:    fields[5],
 			fstype:     fstype,
+			source:     source,
 		})
 	}
 	return entries, scanner.Err()
@@ -347,15 +414,18 @@ func isFuseFS(fstype string) bool {
 	return strings.HasPrefix(fstype, "fuse") && fstype != "fusectl"
 }
 
-// isStaleMount returns true if the error indicates a dead FUSE mount
-// ("Transport endpoint is not connected" or similar).
+// isStaleMount reports whether err shows the FUSE connection is gone: the
+// kernel answers ENOTCONN once the daemon has closed /dev/fuse or the
+// connection was aborted, and ECONNABORTED to requests the abort caught in
+// flight. EIO is not proof: a live daemon can return it for a failed
+// request.
 func isStaleMount(err error) bool {
 	if err == nil {
 		return false
 	}
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
-		return errno == syscall.ENOTCONN || errno == syscall.EIO
+		return errno == syscall.ENOTCONN || errno == syscall.ECONNABORTED
 	}
 	return false
 }

@@ -338,14 +338,15 @@ func TestIntegrationRemountInContainersNoOp(t *testing.T) {
 	)
 }
 
-// TestIntegrationRemountStaleFuseInContainersNoOp verifies the
-// scan-based variant is also a safe no-op.
-func TestIntegrationRemountStaleFuseInContainersNoOp(t *testing.T) {
+// TestIntegrationRepairStaleContainerMountsNoOp verifies the
+// level-triggered repair is also a safe no-op.
+func TestIntegrationRepairStaleContainerMountsNoOp(t *testing.T) {
 	skipIfNotRoot(t)
 
-	remountStaleFuseInContainers(
+	if n := repairStaleContainerMounts(
 		"/var/lib/kubelet/pods/fake-uid/volumes/kubernetes.io~csi/pv/mount",
 		"/tmp/nonexistent-staging",
-		false,
-	)
+	); n != 0 {
+		t.Fatalf("repaired %d mounts with nothing to repair", n)
+	}
 }

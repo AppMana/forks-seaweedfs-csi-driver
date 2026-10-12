@@ -295,6 +295,37 @@ func (ns *NodeServer) performVolumeHealthCheck(volumeID string) {
 		glog.Warningf("health monitor: detected unhealthy publish mount for volume %s", volumeID)
 		ns.retryPublishPaths(volumeID)
 	}
+
+	ns.repairContainerMounts(volumeID)
+}
+
+// repairContainerMounts puts every running container the volume is
+// published to back on the live staging mount if it holds an older mount
+// of the volume whose FUSE daemon is gone. The host-side publish bind can
+// be healthy while the container's is not: the container runtime binds the
+// volume into the container with private propagation, so neither a
+// recovery nor kubelet unstaging and re-staging the volume under a running
+// pod reaches the container's mount. Running this on every sweep, rather
+// than only right after a recovery, repairs a container whichever event
+// left it on a dead mount, including one that happened while this plugin
+// was not running.
+func (ns *NodeServer) repairContainerMounts(volumeID string) {
+	volumeMutex := ns.getVolumeMutex(volumeID)
+	volumeMutex.Lock()
+	defer volumeMutex.Unlock()
+
+	val, ok := ns.volumes.Load(volumeID)
+	if !ok {
+		return
+	}
+	vol := val.(*Volume)
+	if vol.StagedPath == "" {
+		return
+	}
+	vol.publishPaths.Range(func(k, _ interface{}) bool {
+		repairStaleContainerMounts(k.(string), vol.StagedPath)
+		return true
+	})
 }
 
 // isDeadMount reports whether path is a mount whose daemon is dead. The
@@ -407,7 +438,7 @@ func (ns *NodeServer) retryPublishPaths(volumeID string) {
 		}
 		glog.Infof("health monitor: successfully re-bound publish path %s for volume %s", path, volumeID)
 
-		remountStaleFuseInContainers(path, vol.StagedPath, readOnly)
+		repairStaleContainerMounts(path, vol.StagedPath)
 		return true
 	})
 }
@@ -615,17 +646,18 @@ func (ns *NodeServer) recoverVolumeAs(volumeID string, hung bool) {
 	ns.volumes.Store(volumeID, newVol)
 
 	// Step 7: Replace stale FUSE mounts inside pod containers (rprivate
-	// propagation blocks host-side changes from reaching them).
-	// Device-keyed so we never touch another volume's mount in the
-	// same pod. Without oldDevice there is no safe identifier and no
-	// automatic retry: hasUnhealthyPublishPath only sees the (now
-	// healthy) host bind, so containers stay broken until pod restart.
-	if oldDevice == "" {
-		glog.Errorf("health monitor: container-side remount for volume %s could not run — no device captured for the old FUSE mount; affected pods will need to be restarted manually because hasUnhealthyPublishPath only sees the (now healthy) host bind", volumeID)
-	} else {
-		for _, p := range recovered {
+	// propagation blocks host-side changes from reaching them). The
+	// device-keyed pass replaces the mount this recovery detached even if
+	// it no longer answers at all; the level-triggered pass replaces any
+	// older dead mount of the volume a container still holds, which the
+	// device of the detached mount does not identify. Paths whose publish
+	// failed are repaired by later sweeps once retryPublishPaths re-binds
+	// them.
+	for _, p := range recovered {
+		if oldDevice != "" {
 			remountInContainers(p.path, stagingPath, oldDevice, p.readOnly)
 		}
+		repairStaleContainerMounts(p.path, stagingPath)
 	}
 
 	if len(failed) > 0 {

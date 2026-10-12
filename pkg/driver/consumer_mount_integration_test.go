@@ -403,7 +403,7 @@ func TestIntegrationConsumerSurvivesMountServiceRestart(t *testing.T) {
 	if err := f.consumer.works(f.backing, "dead"); err == nil {
 		t.Fatal("consumer still works after its FUSE daemon was killed; the test exercises nothing")
 	}
-	f.requireConsumerRecovers("after-restart", defaultUnhealthyThreshold+1)
+	f.requireConsumerRecovers("after-restart", defaultUnhealthyThreshold)
 }
 
 // TestIntegrationConsumerSurvivesRestageUnderIt: kubelet unstages and
@@ -415,7 +415,7 @@ func TestIntegrationConsumerSurvivesRestageUnderIt(t *testing.T) {
 	if err := f.consumer.works(f.backing, "dead"); err == nil {
 		t.Fatal("consumer still works after its volume was unstaged; the test exercises nothing")
 	}
-	f.requireConsumerRecovers("after-restage", 2)
+	f.requireConsumerRecovers("after-restage", 1)
 }
 
 // TestIntegrationConsumerSurvivesMountServiceRestartAfterRestage: a
@@ -427,5 +427,5 @@ func TestIntegrationConsumerSurvivesMountServiceRestartAfterRestage(t *testing.T
 	f := newConsumerFixture(t)
 	f.restageUnderRunningConsumer()
 	f.svc.restart()
-	f.requireConsumerRecovers("after-restage-and-restart", defaultUnhealthyThreshold+1)
+	f.requireConsumerRecovers("after-restage-and-restart", defaultUnhealthyThreshold)
 }
