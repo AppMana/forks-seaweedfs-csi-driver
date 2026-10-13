@@ -16,7 +16,7 @@ ARG WEED_CGO=0
 ARG WINFSP_HEADERS_TAG=v2.1
 ARG PAYLOAD_STAGE=builder
 
-FROM --platform=linux/amd64 golang:1.26.0 AS builder
+FROM --platform=linux/amd64 golang:1.26.6 AS builder
 
 ARG SEAWEEDFS_REPO
 ARG SEAWEEDFS_COMMIT

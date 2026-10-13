@@ -54,7 +54,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 			builder := "golang:1.26.6-alpine"
 			if file == "Dockerfile.Windows" {
 				pin = pins["SEAWEEDFS_WINDOWS_COMMIT"]
-				builder = "golang:1.26.0"
+				builder = "golang:1.26.6 "
 			}
 			for _, required := range []string{
 				builder,
