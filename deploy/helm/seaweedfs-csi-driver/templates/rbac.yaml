@@ -172,6 +172,10 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumes"]
     verbs: ["get", "list", "watch"]
+  # Windows publishes record where the pod's containers mount the volume.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
 
 ---
 kind: ClusterRoleBinding

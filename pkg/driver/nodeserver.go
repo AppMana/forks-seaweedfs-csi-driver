@@ -94,6 +94,10 @@ type NodeServer struct {
 	// vacLoader reads the persisted VolumeAttributesClass parameters for a
 	// volume. Nil means the default filer-backed store.
 	vacLoader func(ctx context.Context, volumeID string) (map[string]string, error)
+
+	// podVolumeMountsFn resolves where a pod's containers mount a volume,
+	// recorded for the Windows mount (mount_roots.go). Nil disables it.
+	podVolumeMountsFn PodVolumeMountsFn
 }
 
 func (ns *NodeServer) loadPersistedVolumeAttributes(ctx context.Context, volumeID string) (map[string]string, error) {
@@ -273,6 +277,7 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	vol.AddPublishPath(targetPath, req.GetReadonly())
+	ns.recordMountRoots(ctx, volumeID, targetPath, req.GetVolumeContext())
 
 	glog.Infof("volume %s successfully published to %s", volumeID, targetPath)
 	return &csi.NodePublishVolumeResponse{}, nil
@@ -334,6 +339,8 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	volumeMutex := ns.getVolumeMutex(volumeID)
 	volumeMutex.Lock()
 	defer volumeMutex.Unlock()
+
+	ns.forgetMountRoots(volumeID, targetPath)
 
 	volume, ok := ns.volumes.Load(volumeID)
 	if !ok {

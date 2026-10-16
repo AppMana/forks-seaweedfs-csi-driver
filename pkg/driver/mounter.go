@@ -132,7 +132,7 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 		"mount",
 		"-dirAutoCreate=true",
 	}
-	args = append(args, platformMountArgs()...)
+	args = append(args, platformMountArgs(m.driver.volumeSocketDir, m.volumeID)...)
 	args = append(args,
 		fmt.Sprintf("-dir=%s", targetPath),
 		fmt.Sprintf("-localSocket=%s", localSocket),
@@ -266,7 +266,7 @@ func ValidateMountArgs(args []string) error {
 			return fmt.Errorf("invalid mount argument %q: use -name=value or boolean -name", arg)
 		}
 		switch name {
-		case "dir", "dirAutoCreate", "localSocket", "cacheDir", "readOnly", "filer", "filer.path", "collection", "collectionQuotaMB":
+		case "dir", "dirAutoCreate", "localSocket", "cacheDir", "readOnly", "filer", "filer.path", "collection", "collectionQuotaMB", "winfspMountRoots":
 			return fmt.Errorf("mount argument %q is managed by the CSI driver", name)
 		}
 	}

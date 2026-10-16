@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // LocalSocketPath returns the unix socket path used to communicate with the weed mount process.
@@ -16,6 +17,12 @@ func LocalSocketPath(baseDir, volumeID string) string {
 	}
 	h := sha256.Sum256([]byte(volumeID))
 	return LocalSocketPathForHash(baseDir, hex.EncodeToString(h[:]))
+}
+
+// MountRootsPath returns the file in which the node plugin records where pods
+// mount the volume, read by the weed mount (-winfspMountRoots, Windows).
+func MountRootsPath(baseDir, volumeID string) string {
+	return strings.TrimSuffix(LocalSocketPath(baseDir, volumeID), ".sock") + ".roots.json"
 }
 
 // LocalSocketPathForHash returns LocalSocketPath for the volume whose

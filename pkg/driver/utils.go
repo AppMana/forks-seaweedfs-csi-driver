@@ -29,13 +29,14 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 		capacityFn: func(volumeID string) (int64, error) {
 			return k8s.GetVolumeCapacity(n.name, volumeID)
 		},
-		nodeLabelsFn:     k8s.GetNodeLabels,
-		isHealthyFn:      isStagingPathHealthy,
-		healthProbeFn:    stagingPathHealth,
-		cleanupStagingFn: cleanupStaleStagingPath,
-		detachStagingFn:  detachDeadMountPoint,
-		unmountFn:        unmountVolume,
-		bindMountFn:      defaultBindMount,
+		nodeLabelsFn:      k8s.GetNodeLabels,
+		podVolumeMountsFn: platformPodVolumeMounts(n.name),
+		isHealthyFn:       isStagingPathHealthy,
+		healthProbeFn:     stagingPathHealth,
+		cleanupStagingFn:  cleanupStaleStagingPath,
+		detachStagingFn:   detachDeadMountPoint,
+		unmountFn:         unmountVolume,
+		bindMountFn:       defaultBindMount,
 		volumeUnmounterFn: func(volumeID string) (Unmounter, error) {
 			client, err := mountmanager.NewClient(n.mountEndpoint)
 			if err != nil {

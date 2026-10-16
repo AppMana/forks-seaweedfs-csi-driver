@@ -34,7 +34,7 @@ func TestMountBuildPinsAgree(t *testing.T) {
 	workflow := read(".github/workflows/build-images.yml")
 	pins := map[string]string{
 		"SEAWEEDFS_COMMIT":         "a2dcf66436aa72ca53e4524f62d85875c458426a",
-		"SEAWEEDFS_WINDOWS_COMMIT": "a2dcf66436aa72ca53e4524f62d85875c458426a",
+		"SEAWEEDFS_WINDOWS_COMMIT": "6a570503378e408c57c74f36efda148c5950595c",
 	}
 	for key, want := range pins {
 		match := regexp.MustCompile(`(?m)^  ` + key + `: ([0-9a-f]{40})$`).FindStringSubmatch(workflow)
@@ -142,8 +142,8 @@ func TestWindowsImageShipsPinnedWinFspDLL(t *testing.T) {
 	}
 	source := string(b)
 	for _, required := range []string{
-		"ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-066843359/winfsp-x64.dll",
-		"ARG WINFSP_DLL_SHA256=082f0cedc800a7ea29f726b9d3116358d20278c0de64f21ccb1c3e14d68c9d9e",
+		"ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-6470974c6/winfsp-x64.dll",
+		"ARG WINFSP_DLL_SHA256=5307390a439e3bb87128f11e09de22bb594df412521100756f3e3686e28c8e60",
 		`echo "${WINFSP_DLL_SHA256}  /out/winfsp-x64.dll" | sha256sum -c -`,
 	} {
 		if !strings.Contains(source, required) {

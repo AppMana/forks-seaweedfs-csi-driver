@@ -4,7 +4,7 @@
 #     -f cmd/seaweedfs-mount/Dockerfile.Windows .
 
 ARG SEAWEEDFS_REPO=https://github.com/AppMana/forks-seaweedfs
-ARG SEAWEEDFS_COMMIT=a2dcf66436aa72ca53e4524f62d85875c458426a
+ARG SEAWEEDFS_COMMIT=6a570503378e408c57c74f36efda148c5950595c
 ARG GO_FUSE_REPO=https://github.com/AppMana/forks-go-fuse
 ARG GO_FUSE_BRANCH=appmana/windows-compile
 ARG GO_FUSE_COMMIT=6ead27e20708423a00718812de796241659ad387
@@ -14,8 +14,8 @@ ARG WINFSP_MSI_SHA256=073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324
 # targets spelled through a directory mount point, which the signed driver
 # alone denies. Shipped beside weed.exe so it is loaded instead of the
 # installed DLL; the driver and MSI stay stock.
-ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-066843359/winfsp-x64.dll
-ARG WINFSP_DLL_SHA256=082f0cedc800a7ea29f726b9d3116358d20278c0de64f21ccb1c3e14d68c9d9e
+ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-6470974c6/winfsp-x64.dll
+ARG WINFSP_DLL_SHA256=5307390a439e3bb87128f11e09de22bb594df412521100756f3e3686e28c8e60
 # WEED_CGO=1 builds weed.exe with cgo against the WinFsp FUSE headers
 # (mingw cross toolchain); the DLL is still loaded at runtime either way.
 ARG WEED_CGO=0
