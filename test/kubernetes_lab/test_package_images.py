@@ -29,6 +29,10 @@ class PackageImages(unittest.TestCase):
         with self.assertRaises(ValueError):
             package_images.required_inputs(['csi-driver'], True)
 
+    def test_mount_packaging_always_requires_the_app_local_dll(self):
+        self.assertIn('winfsp-x64.dll', package_images.required_inputs(['mount'], False))
+        self.assertIn('winfsp-x64.dll', package_images.required_inputs(['mount'], True))
+
     def test_dll_only_rejects_nonstock_installer_before_build(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

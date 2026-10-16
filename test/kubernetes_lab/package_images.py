@@ -112,9 +112,8 @@ def required_inputs(components, winfsp_dll):
     required = [f'seaweedfs-{component}{suffix}' for component in components
                 for suffix in ('', '.exe')]
     if 'mount' in components:
-        required += ['weed', 'weed.exe', 'winfsp.msi']
-    if winfsp_dll:
-        required.append('winfsp-x64.dll')
+        # The deployed Windows mount image always carries the app-local DLL.
+        required += ['weed', 'weed.exe', 'winfsp.msi', 'winfsp-x64.dll']
     return required
 
 
@@ -127,7 +126,7 @@ def main():
     parser.add_argument('--component', action='append', choices=('csi-driver', 'mount'),
                         help='package only selected components; default is both')
     parser.add_argument('--winfsp-dll', action='store_true',
-                        help='package pinned app-local winfsp-x64.dll; retain the stock MSI/driver')
+                        help='build the dll-only target (context DLL, stock MSI/driver); the default target also carries the DLL')
     args = parser.parse_args()
     components = list(dict.fromkeys(args.component or ['csi-driver', 'mount']))
     try:
@@ -140,7 +139,7 @@ def main():
         if not re.fullmatch(r'[0-9a-f]{64}', digest) or not re.fullmatch(r'[A-Za-z0-9_.-]+', name) or name in pins:
             parser.error('invalid or duplicate pinned filename')
         pins[name] = digest
-    if args.winfsp_dll:
+    if 'mount' in components:
         if pins.get('winfsp.msi') != '073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a':
             parser.error('DLL-only packaging requires the pinned official WinFsp MSI')
     for name in required:
@@ -167,6 +166,8 @@ def main():
             if windows:
                 expected['winfsp.msi'] = pins['winfsp.msi']
                 build_args['WINFSP_MSI_SHA256'] = pins['winfsp.msi']
+                expected['winfsp-x64.dll'] = pins['winfsp-x64.dll']
+                build_args['WINFSP_DLL_SHA256'] = pins['winfsp-x64.dll']
         command = ['docker', 'buildx', 'build', '--builder', args.builder,
                    '--platform', platform + '/amd64', '--provenance=false', '--sbom=false',
                    '--metadata-file', str(output / (name + '-build.json')),
@@ -174,8 +175,6 @@ def main():
                    '-t', 'appmana/seaweedfs-' + component + ':' + output.name.lower() + '-' + platform,
                    '-f', str(dockerfile)]
         if args.winfsp_dll and windows and component == 'mount':
-            expected['winfsp-x64.dll'] = pins['winfsp-x64.dll']
-            build_args['WINFSP_DLL_SHA256'] = pins['winfsp-x64.dll']
             command += ['--target', 'dll-only']
         for key, value in build_args.items():
             command += ['--build-arg', key + '=' + value]

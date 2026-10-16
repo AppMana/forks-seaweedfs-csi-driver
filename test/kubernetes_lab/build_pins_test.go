@@ -129,3 +129,30 @@ func atoi(t *testing.T, s string) int {
 	}
 	return n
 }
+
+// The stock signed WinFsp driver cannot classify absolute symlinks into a
+// directory-mounted volume; the released user-mode DLL from
+// AppMana/forks-winfsp-fixes does. cgofuse loads winfsp-x64.dll from the
+// executable's directory before the installed one, so the deployed (default)
+// image must place exactly the pinned release next to weed.exe.
+func TestWindowsImageShipsPinnedWinFspDLL(t *testing.T) {
+	b, err := os.ReadFile("../../cmd/seaweedfs-mount/Dockerfile.Windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(b)
+	for _, required := range []string{
+		"ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-a52117041/winfsp-x64.dll",
+		"ARG WINFSP_DLL_SHA256=e1403ed5b8d39e0f6d8871d8af82f19dc562cdeb5dc469680698fe88c215eb37",
+		`echo "${WINFSP_DLL_SHA256}  /out/winfsp-x64.dll" | sha256sum -c -`,
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("missing %q", required)
+		}
+	}
+	stages := strings.Split(source, "\nFROM ")
+	last := stages[len(stages)-1]
+	if !strings.HasPrefix(last, "stock AS default") || !strings.Contains(last, "COPY --from=payload /out/winfsp-x64.dll /winfsp-x64.dll") {
+		t.Fatalf("the default image must add the released DLL beside /weed.exe:\n%s", last)
+	}
+}
