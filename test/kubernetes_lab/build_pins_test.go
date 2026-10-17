@@ -142,8 +142,8 @@ func TestWindowsImageShipsPinnedWinFspDLL(t *testing.T) {
 	}
 	source := string(b)
 	for _, required := range []string{
-		"ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-0431274a5/winfsp-x64.dll",
-		"ARG WINFSP_DLL_SHA256=d8021fd10d139c2c9493a09b8f8f6fc19866a190fcfe6ffcaa33f8b9827da906",
+		"ARG WINFSP_DLL_URL=https://github.com/AppMana/forks-winfsp-fixes/releases/download/appmana-dll-2.1-066843359/winfsp-x64.dll",
+		"ARG WINFSP_DLL_SHA256=082f0cedc800a7ea29f726b9d3116358d20278c0de64f21ccb1c3e14d68c9d9e",
 		`echo "${WINFSP_DLL_SHA256}  /out/winfsp-x64.dll" | sha256sum -c -`,
 	} {
 		if !strings.Contains(source, required) {
