@@ -187,6 +187,14 @@ func TestHealthMonitorDoesNotFlagMountAnsweringWithinRequestBound(t *testing.T) 
 		ns.checkAndRecoverVolumes()
 		ns.recoveryWg.Wait()
 		<-answered
+		// The probe answers before it leaves the in-flight set; a sweep
+		// in between would attach to it instead of probing again.
+		for {
+			if _, inFlight := healthProbes.Load(stagingPath); !inFlight {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
 	}
 
 	state.mu.Lock()
