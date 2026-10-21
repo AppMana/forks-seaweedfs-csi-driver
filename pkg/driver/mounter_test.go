@@ -217,3 +217,31 @@ func TestBuildMountArgsWriteBufferSize(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildMountArgsWholeCacheAndSharedChunkDir(t *testing.T) {
+	m := &mountServiceMounter{
+		driver: &SeaweedFsDriver{
+			CacheCapacityMB: 10240,
+		},
+		volumeID: "/buckets/pvc-shared",
+		volContext: map[string]string{
+			"wholeCacheCapacityMB": "51200",
+			"sharedChunkCacheDir":  "/var/cache/seaweedfs/chunks",
+			"readerCacheSizeMB":    "512",
+		},
+	}
+	args, err := m.buildMountArgs("/staging", "/var/cache/seaweedfs/abc", "/socket", []string{"filer:8888"})
+	if err != nil {
+		t.Fatalf("buildMountArgs: %v", err)
+	}
+	for _, want := range []string{
+		"-cacheCapacityMB=10240",
+		"-wholeCacheCapacityMB=51200",
+		"-sharedChunkCacheDir=/var/cache/seaweedfs/chunks",
+		"-readerCacheSizeMB=512",
+	} {
+		if !slices.Contains(args, want) {
+			t.Fatalf("missing %s in %v", want, args)
+		}
+	}
+}

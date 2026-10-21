@@ -436,6 +436,9 @@ var mutableMountParameters = map[string]struct{}{
 	"concurrentReaders":    {},
 	"concurrentWriters":    {},
 	"cacheCapacityMB":      {},
+	"wholeCacheCapacityMB": {},
+	"sharedChunkCacheDir":  {},
+	"readerCacheSizeMB":    {},
 	"cacheMetaTtlSec":      {},
 	"writebackCache":       {},
 	"metadataFlushSeconds": {},
@@ -451,7 +454,7 @@ func validateMutableParameterValues(key, value string) error {
 		if _, ok := datalocality.FromString(value); !ok {
 			return fmt.Errorf("invalid dataLocality %q", value)
 		}
-	case "concurrentReaders", "concurrentWriters", "cacheCapacityMB", "cacheMetaTtlSec", "chunkSizeLimitMB", "metadataFlushSeconds":
+	case "concurrentReaders", "concurrentWriters", "cacheCapacityMB", "wholeCacheCapacityMB", "readerCacheSizeMB", "cacheMetaTtlSec", "chunkSizeLimitMB", "metadataFlushSeconds":
 		if _, err := strconv.Atoi(value); err != nil {
 			return fmt.Errorf("%s must be an integer, got %q", key, value)
 		}

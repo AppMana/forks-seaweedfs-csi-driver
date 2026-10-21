@@ -76,6 +76,10 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 	}
 	for _, e := range entries {
 		name := e.Name()
+		if name == "chunks" {
+			// Preserve the shared node-wide read chunk cache directory across mounts and modalities.
+			continue
+		}
 		if _, staged := keep[name]; staged {
 			continue
 		}

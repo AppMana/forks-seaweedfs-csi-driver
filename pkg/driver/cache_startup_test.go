@@ -66,6 +66,16 @@ func TestNodeServerStartupKeepsCachesOfLiveMounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Shared node-wide chunk cache directory under <cacheBase>/chunks must also survive startup.
+	sharedChunkDir := filepath.Join(cacheBase, "chunks", "00")
+	if err := os.MkdirAll(sharedChunkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sharedChunkMarker := filepath.Join(sharedChunkDir, "3,01f8a9b0c1.chunk")
+	if err := os.WriteFile(sharedChunkMarker, []byte("shared-chunk"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	driver := &SeaweedFsDriver{
 		name:            driverName,
 		CacheDir:        cacheBase,
@@ -75,7 +85,7 @@ func TestNodeServerStartupKeepsCachesOfLiveMounts(t *testing.T) {
 	ns := NewNodeServer(driver)
 	defer ns.NodeCleanup()
 
-	for name, marker := range map[string]string{"served": servedMarker, "staged": stagedMarker} {
+	for name, marker := range map[string]string{"served": servedMarker, "staged": stagedMarker, "shared chunks": sharedChunkMarker} {
 		if _, err := os.Stat(marker); err != nil {
 			t.Errorf("%s volume lost its cache at node-server startup: %v", name, err)
 		}
