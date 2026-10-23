@@ -33,8 +33,8 @@ func TestMountBuildPinsAgree(t *testing.T) {
 	}
 	workflow := read(".github/workflows/build-images.yml")
 	pins := map[string]string{
-		"SEAWEEDFS_COMMIT":         "6c07c810b02199bc7bb4d38bee27efb2ba9da100",
-		"SEAWEEDFS_WINDOWS_COMMIT": "6c07c810b02199bc7bb4d38bee27efb2ba9da100",
+		"SEAWEEDFS_COMMIT":         "17806ab0557444ce3f03cc62aec5a8768b4e1885",
+		"SEAWEEDFS_WINDOWS_COMMIT": "17806ab0557444ce3f03cc62aec5a8768b4e1885",
 	}
 	for key, want := range pins {
 		match := regexp.MustCompile(`(?m)^  ` + key + `: ([0-9a-f]{40})$`).FindStringSubmatch(workflow)
