@@ -34,11 +34,15 @@ func TestStopKillsChild(t *testing.T) {
 		t.Fatalf("starting child: %v", err)
 	}
 
+	output := &processOutput{volumeID: "test"}
 	p := &weedMountProcess{
 		cmd:    cmd,
 		target: filepath.Join(t.TempDir(), "nonexistent-target"),
 		exited: make(chan struct{}),
 		done:   make(chan struct{}),
+		output: output,
+		stdout: &lineWriter{output: output, stream: "stdout"},
+		stderr: &lineWriter{output: output, stream: "stderr"},
 	}
 
 	if err := p.afterStart(); err != nil {
