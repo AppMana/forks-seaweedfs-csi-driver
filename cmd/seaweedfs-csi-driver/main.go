@@ -29,12 +29,12 @@ var (
 	cacheCapacityMB      = flag.Int("cacheCapacityMB", 0, "local file chunk cache capacity in MB")
 	writeBufferSizeMB    = flag.Int("writeBufferSizeMB", 0, "cap on each mount's dirty data (memory and swap) in MB, so close() and fsync() drain within the mount's request deadline; 0 means no cap")
 	cacheMetaTtlSec      = flag.Int("cacheMetaTtlSec", 60, "metadata cache TTL in seconds")
-	cacheDir             = flag.String("cacheDir", os.TempDir(), "local cache directory for file chunks and meta data")
+	cacheDir             = flag.String("cacheDir", driver.DefaultCacheDir, "node cache base: per-volume caches <cacheDir>/<sha256 of volume id> and the shared chunk cache <cacheDir>/chunks")
 	uidMap               = flag.String("map.uid", "", "map local uid to uid on filer, comma-separated <local_uid>:<filer_uid>")
 	gidMap               = flag.String("map.gid", "", "map local gid to gid on filer, comma-separated <local_gid>:<filer_gid>")
 	dataCenter           = flag.String("dataCenter", "", "dataCenter this node is running in (locality-definition)")
 	dataLocalityStr      = flag.String("dataLocality", "", "which volume-nodes pods will use for activity (one-of: 'write_preferLocalDc'). Requires used locality-definitions to be set")
-	stagingScanDir       = flag.String("stagingScanDir", "", "kubelet CSI plugins directory (<kubelet root>/plugins/kubernetes.io/csi) scanned at node startup to rediscover staged volumes; empty disables the scan")
+	stagingScanDir       = flag.String("stagingScanDir", driver.DefaultStagingScanDir, "kubelet CSI plugins directory (<kubelet root>/plugins/kubernetes.io/csi) scanned at node startup to rediscover staged volumes; set it when kubelet runs with another --root-dir, empty disables the scan")
 	topologyKeys         = flag.String("topologyKeys", "", "comma-separated node label keys reported as accessible topology, e.g. topology.kubernetes.io/zone")
 	dataLocality         datalocality.DataLocality
 	parsedMountExtraArgs []string

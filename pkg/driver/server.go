@@ -70,8 +70,8 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 		if !strings.HasPrefix(addr, "/") && !filepath.IsAbs(addr) {
 			addr = "/" + addr
 		}
-		if err := os.Remove(addr); err != nil && !os.IsNotExist(err) {
-			glog.Fatalf("Failed to remove %s, error: %s", addr, err.Error())
+		if err := prepareUnixEndpoint(addr); err != nil {
+			glog.Fatalf("Failed to prepare endpoint %s: %v", addr, err)
 		}
 	}
 
@@ -99,4 +99,16 @@ func (s *nonBlockingGRPCServer) serve(endpoint string, ids csi.IdentityServer, c
 	glog.Infof("Listening for connections on address: %#v", listener.Addr())
 
 	server.Serve(listener)
+}
+
+// prepareUnixEndpoint creates the socket's directory, which need not exist on
+// a fresh node, and removes a socket file left by a previous process.
+func prepareUnixEndpoint(addr string) error {
+	if err := os.MkdirAll(filepath.Dir(addr), 0o755); err != nil {
+		return err
+	}
+	if err := os.Remove(addr); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
