@@ -59,8 +59,9 @@ func cleanupDeadMountPoint(target string) {
 	}
 }
 
-// waitForMount polls until path is a mount point or the timeout elapses.
-func waitForMount(path string, timeout time.Duration) error {
+// waitForMount polls until path is a mount point, the process closes
+// exited (errProcessExited) or the timeout elapses.
+func waitForMount(path string, timeout time.Duration, exited <-chan struct{}) error {
 	var elapsed time.Duration
 	interval := 10 * time.Millisecond
 
@@ -73,7 +74,11 @@ func waitForMount(path string, timeout time.Duration) error {
 			return nil
 		}
 
-		time.Sleep(interval)
+		select {
+		case <-exited:
+			return errProcessExited
+		case <-time.After(interval):
+		}
 		elapsed += interval
 		if elapsed >= timeout {
 			return errors.New("timeout waiting for mount")

@@ -7,6 +7,10 @@ type MountRequest struct {
 	CacheDir    string   `json:"cacheDir"`
 	MountArgs   []string `json:"mountArgs"`
 	LocalSocket string   `json:"localSocket"`
+	// RequiredFlags names mount flags (without the dash) the mount must
+	// not run without, in addition to RequiredMountFlags. Other flags the
+	// mount service's weed does not define are dropped.
+	RequiredFlags []string `json:"requiredFlags,omitempty"`
 }
 
 // MountResponse is returned after a successful mount request.
