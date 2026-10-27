@@ -28,10 +28,10 @@ $(OUTPUT_DIR):
 	mkdir -p $@
 
 $(DRIVER_BINARY): | $(OUTPUT_DIR)
-	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '$(LDFLAGS)' -o $@ ./cmd/seaweedfs-csi-driver/main.go
+	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '$(LDFLAGS)' -o $@ ./cmd/seaweedfs-csi-driver
 
 $(MOUNT_BINARY): | $(OUTPUT_DIR)
-	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '$(LDFLAGS)' -o $@ ./cmd/seaweedfs-mount/main.go
+	CGO_ENABLED=0 GOOS=linux go build -a -ldflags '$(LDFLAGS)' -o $@ ./cmd/seaweedfs-mount
 
 build-windows: | $(OUTPUT_DIR)
 	mkdir -p $(OUTPUT_DIR)/windows

@@ -45,7 +45,7 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ENV CGO_ENABLED=0
 RUN export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
-    && go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount/main.go \
+    && go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount \
     && cd /go/src/github.com/seaweedfs/seaweedfs/weed \
     && CGO_ENABLED=0 go build -trimpath -tags 5BytesOffset \
          -ldflags "-X github.com/seaweedfs/seaweedfs/weed/util/version.COMMIT=${SEAWEEDFS_COMMIT}" \

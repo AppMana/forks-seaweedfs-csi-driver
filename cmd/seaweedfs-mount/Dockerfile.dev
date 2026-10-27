@@ -29,7 +29,7 @@ RUN git clone ${SEAWEEDFS_REPO} /go/src/github.com/seaweedfs/seaweedfs \
 WORKDIR /go/src/github.com/seaweedfs/seaweedfs-csi-driver
 COPY . .
 
-RUN go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount/main.go
+RUN go build -ldflags="-s -w" -o /seaweedfs-mount ./cmd/seaweedfs-mount
 
 FROM alpine AS final
 RUN apk add fuse

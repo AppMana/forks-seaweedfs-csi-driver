@@ -16,7 +16,7 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ENV CGO_ENABLED=0
 RUN export GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOARM=${TARGETVARIANT#v} \
-    && go build -ldflags="-s -w" -o /seaweedfs-csi-driver ./cmd/seaweedfs-csi-driver/main.go
+    && go build -ldflags="-s -w" -o /seaweedfs-csi-driver ./cmd/seaweedfs-csi-driver
 
 FROM alpine AS prebuilt
 ARG DRIVER_SHA256

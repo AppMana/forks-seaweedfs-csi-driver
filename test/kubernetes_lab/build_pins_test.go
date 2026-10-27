@@ -208,3 +208,22 @@ func TestWindowsJobInstallsTheImageWinFspPin(t *testing.T) {
 		}
 	}
 }
+
+// The commands have platform files beside main.go (seaweedfs-mount's host
+// prerequisites); a build naming main.go alone leaves them out and fails.
+func TestBuildsCompileWholeCommandPackages(t *testing.T) {
+	files, err := filepath.Glob("../../cmd/*/Dockerfile*")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no Dockerfiles found: %v", err)
+	}
+	files = append(files, "../../Makefile")
+	for _, file := range files {
+		b, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), "/main.go") {
+			t.Errorf("%s builds a single main.go instead of the command package", strings.TrimPrefix(file, "../../"))
+		}
+	}
+}
