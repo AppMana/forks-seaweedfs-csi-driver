@@ -34,6 +34,10 @@ func main() {
 	}
 	flag.Parse()
 
+	if err := ensureHostPrerequisites(); err != nil {
+		glog.Fatalf("host prerequisites: %v", err)
+	}
+
 	scheme, address, err := mountmanager.ParseEndpoint(*endpoint)
 	if err != nil {
 		glog.Fatalf("invalid endpoint: %v", err)
