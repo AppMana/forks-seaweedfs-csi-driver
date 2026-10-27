@@ -86,3 +86,76 @@ func TestCacheSweepKeepsCacheOfVolumeBeingStaged(t *testing.T) {
 		t.Fatalf("sweep removed the cache of a volume being staged: %v", err)
 	}
 }
+
+// A sweep waiting for a slow stage must not hold up other stages on the
+// node: it gives up for this round instead of queueing for the lock.
+func TestPendingCacheSweepDoesNotDelayOtherStages(t *testing.T) {
+	cacheBase := t.TempDir()
+	slowID, fastID := "/buckets/pvc-slow", "/buckets/pvc-fast"
+	slowCache := GetCacheDir(cacheBase, slowID)
+	slow := &blockingMounter{
+		cacheDir: slowCache,
+		marker:   filepath.Join(slowCache, "c1_3_0.dat"),
+		created:  make(chan struct{}),
+		release:  make(chan struct{}),
+	}
+	defer func() {
+		select {
+		case <-slow.release:
+		default:
+			close(slow.release)
+		}
+	}()
+	ns := newTestNodeServer(t, nil)
+	ns.Driver.CacheDir = cacheBase
+	ns.Driver.volumeSocketDir = t.TempDir()
+	ns.vacLoader = func(context.Context, string) (map[string]string, error) { return nil, nil }
+	ns.mounterFactory = func(volumeID string, _ bool, _ *SeaweedFsDriver, _ map[string]string) (Mounter, error) {
+		if volumeID == slowID {
+			return slow, nil
+		}
+		return &fakeMounter{}, nil
+	}
+	stage := func(volumeID string) error {
+		_, err := ns.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+			VolumeId:          volumeID,
+			StagingTargetPath: filepath.Join(t.TempDir(), "globalmount"),
+			VolumeCapability: &csi.VolumeCapability{
+				AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
+				AccessMode: &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER},
+			},
+		})
+		return err
+	}
+
+	slowDone := make(chan error, 1)
+	go func() { slowDone <- stage(slowID) }()
+	<-slow.created
+
+	swept := make(chan struct{})
+	go func() {
+		ns.runCacheSweep()
+		close(swept)
+	}()
+	time.Sleep(50 * time.Millisecond)
+
+	fastDone := make(chan error, 1)
+	go func() { fastDone <- stage(fastID) }()
+	select {
+	case err := <-fastDone:
+		if err != nil {
+			t.Fatalf("stage of %s: %v", fastID, err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a pending cache sweep held up an unrelated stage")
+	}
+
+	close(slow.release)
+	if err := <-slowDone; err != nil {
+		t.Fatalf("stage of %s: %v", slowID, err)
+	}
+	<-swept
+	if _, err := os.Stat(slow.marker); err != nil {
+		t.Fatalf("sweep removed the cache of a volume being staged: %v", err)
+	}
+}

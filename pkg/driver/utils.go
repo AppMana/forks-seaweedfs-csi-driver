@@ -66,7 +66,12 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 	}
 	// Deleting a large cache takes long; only moving it aside needs the
 	// lock, so stages wait for the decision, not for the deletion.
-	for _, dir := range ns.detachOrphanCacheDirs(cacheBase) {
+	detached, swept := ns.detachOrphanCacheDirs(cacheBase)
+	if !swept {
+		glog.V(1).Infof("cache sweep skipped: a volume is being staged")
+		return
+	}
+	for _, dir := range detached {
 		if err := os.RemoveAll(dir); err != nil {
 			glog.Warningf("error removing orphan cache dir %s: %v", dir, err)
 		}
@@ -78,9 +83,13 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 const removingCachePrefix = ".removing-"
 
 // detachOrphanCacheDirs renames every orphaned cache directory under
-// cacheBase aside and returns the paths to delete.
-func (ns *NodeServer) detachOrphanCacheDirs(cacheBase string) []string {
-	ns.cacheMu.Lock()
+// cacheBase aside and returns the paths to delete. While a volume is being
+// staged it does nothing and reports false: waiting for the lock would hold
+// up every stage that comes after it (a waiting writer blocks new readers).
+func (ns *NodeServer) detachOrphanCacheDirs(cacheBase string) ([]string, bool) {
+	if !ns.cacheMu.TryLock() {
+		return nil, false
+	}
 	defer ns.cacheMu.Unlock()
 	keep := map[string]struct{}{}
 	ns.volumes.Range(func(key, _ any) bool {
@@ -92,7 +101,7 @@ func (ns *NodeServer) detachOrphanCacheDirs(cacheBase string) []string {
 		if !os.IsNotExist(err) {
 			glog.Warningf("cannot read cache dir %s: %v", cacheBase, err)
 		}
-		return nil
+		return nil, true
 	}
 	var detached []string
 	for _, e := range entries {
@@ -108,6 +117,9 @@ func (ns *NodeServer) detachOrphanCacheDirs(cacheBase string) []string {
 		if _, staged := keep[name]; staged {
 			continue
 		}
+		if ns.kubeletHasStaged(name) {
+			continue
+		}
 		if isCacheOfServedMount(ns.Driver.volumeSocketDir, name) {
 			glog.Infof("keeping cache dir %s of a mount the mount service is serving", name)
 			continue
@@ -120,7 +132,19 @@ func (ns *NodeServer) detachOrphanCacheDirs(cacheBase string) []string {
 		glog.Infof("removing orphan cache dir %s", name)
 		detached = append(detached, aside)
 	}
-	return detached
+	return detached, true
+}
+
+// kubeletHasStaged reports whether kubelet still has a staging directory for
+// the volume whose cache directory is cacheDirName. Both are named by the
+// SHA-256 of the volume handle, and kubelet removes its directory only after
+// NodeUnstageVolume succeeds.
+func (ns *NodeServer) kubeletHasStaged(cacheDirName string) bool {
+	if ns.Driver.StagingScanDir == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(ns.Driver.StagingScanDir, ns.Driver.name, cacheDirName))
+	return err == nil
 }
 
 // isCacheOfServedMount reports whether a weed mount accepts connections on

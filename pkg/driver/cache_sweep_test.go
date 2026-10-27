@@ -54,3 +54,31 @@ func TestNodeServerSweepsOrphanCachesWhileRunning(t *testing.T) {
 		t.Fatalf("sweep removed the shared chunk cache: %v", err)
 	}
 }
+
+// kubelet keeps a volume's staging directory, named by the same hash as its
+// cache, until NodeUnstageVolume succeeds. While the mount pod rolls, every
+// mount's socket is dead for about a minute and a volume the plugin could
+// not rediscover is not in its staged set: the staging directory alone keeps
+// the cache.
+func TestCacheSweepKeepsCacheWhileKubeletHasTheVolumeStaged(t *testing.T) {
+	cacheBase := t.TempDir()
+	scanDir := t.TempDir()
+	driverName := "seaweedfs-csi-driver"
+	volumeID := "/buckets/pvc-staged-not-rediscovered"
+	marker := seedCacheFile(t, GetCacheDir(cacheBase, volumeID))
+	stagingDir := filepath.Join(scanDir, driverName, filepath.Base(GetCacheDir(cacheBase, volumeID)), "globalmount")
+	if err := os.MkdirAll(stagingDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ns := NewNodeServer(&SeaweedFsDriver{
+		name:            driverName,
+		CacheDir:        cacheBase,
+		volumeSocketDir: t.TempDir(),
+		StagingScanDir:  scanDir,
+	})
+	defer ns.NodeCleanup()
+	ns.removeOrphanCacheDirs()
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("sweep removed the cache of a volume kubelet has staged: %v", err)
+	}
+}
