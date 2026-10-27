@@ -1,10 +1,9 @@
 package mountmanager
 
 import (
-	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -24,6 +23,11 @@ type Manager struct {
 	mu     sync.Mutex
 	mounts map[string]*mountEntry
 	locks  *keyMutex
+
+	// flags caches which flags weedBinary's mount command defines; the
+	// binary does not change while the mount service runs.
+	flagsMu sync.Mutex
+	flags   *weedMountFlags
 }
 
 // Config configures a Manager instance.
@@ -44,6 +48,25 @@ func NewManager(cfg Config) *Manager {
 		mounts:     make(map[string]*mountEntry),
 		locks:      newKeyMutex(),
 	}
+}
+
+// mountFlags returns the flags weed mount defines, or nil if they cannot be
+// read, in which case the mount arguments pass through unfiltered and a
+// weed mount that rejects one fails with its own usage error.
+func (m *Manager) mountFlags() *weedMountFlags {
+	m.flagsMu.Lock()
+	defer m.flagsMu.Unlock()
+	if m.flags != nil {
+		return m.flags
+	}
+	flags, err := probeWeedMountFlags(m.weedBinary)
+	if err != nil {
+		glog.Warningf("cannot read the flags weed mount defines; passing mount arguments through unfiltered: %v", err)
+		return nil
+	}
+	glog.Infof("weed mount (%s) defines %d flags", flags.version, len(flags.defined))
+	m.flags = flags
+	return flags
 }
 
 // Mount starts a weed mount process using the provided request.
@@ -179,6 +202,21 @@ func (m *Manager) removeMount(volumeID string) *mountEntry {
 }
 
 func (m *Manager) startMount(req *MountRequest) (*mountEntry, error) {
+	args := req.MountArgs
+	if len(args) == 0 {
+		return nil, errors.New("mountArgs is required")
+	}
+	// The node plugin assembles the arguments and may be a newer build than
+	// this service's weed: drop optional flags weed does not define and
+	// refuse required ones, before touching the target.
+	if flags := m.mountFlags(); flags != nil {
+		filtered, err := filterMountArgs(req.VolumeID, args, flags, req.RequiredFlags)
+		if err != nil {
+			return nil, err
+		}
+		args = filtered
+	}
+
 	targetPath := req.TargetPath
 	if err := ensureTargetClean(targetPath); err != nil {
 		return nil, err
@@ -195,11 +233,6 @@ func (m *Manager) startMount(req *MountRequest) (*mountEntry, error) {
 	localSocket := req.LocalSocket
 	if localSocket == "" {
 		return nil, errors.New("localSocket is required")
-	}
-
-	args := req.MountArgs
-	if len(args) == 0 {
-		return nil, errors.New("mountArgs is required")
 	}
 
 	process, err := startWeedMount(m.weedBinary, args, targetPath, req.VolumeID)
@@ -255,6 +288,14 @@ type weedMountProcess struct {
 	// the cleanup of the dead mount point at the target).
 	done chan struct{}
 
+	// output logs the process's stdout and stderr and keeps their first
+	// and last lines; exitErr is cmd.Wait's result. Both are complete once
+	// exited is closed.
+	output  *processOutput
+	stdout  *lineWriter
+	stderr  *lineWriter
+	exitErr error
+
 	// platformProcess holds per-OS supervision state (e.g. the Windows
 	// job object handle). It is a zero-size struct on Linux.
 	platformProcess
@@ -262,19 +303,26 @@ type weedMountProcess struct {
 
 var startWeedMount = startWeedMountProcess
 
+// mountWaitTimeout bounds how long a running weed mount may take to bring
+// the mount up.
+const mountWaitTimeout = 10 * time.Second
+
+// outputWaitDelay bounds how long Wait keeps reading output after weed
+// mount exits, should anything it started still hold its stdout or stderr.
+const outputWaitDelay = 2 * time.Second
+
 func startWeedMountProcess(command string, args []string, target string, volumeID string) (*weedMountProcess, error) {
 	cmd := exec.Command(command, args...)
 	configureCmd(cmd)
 
-	// Capture stdout/stderr and log with volume ID prefix for better debugging
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("creating stdout pipe: %w", err)
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return nil, fmt.Errorf("creating stderr pipe: %w", err)
-	}
+	// Log stdout/stderr with the volume ID prefix, and keep the lines that
+	// explain an exit before the mount comes up.
+	output := &processOutput{volumeID: volumeID}
+	stdout := &lineWriter{output: output, stream: "stdout"}
+	stderr := &lineWriter{output: output, stream: "stderr"}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	cmd.WaitDelay = outputWaitDelay
 
 	glog.V(0).Infof("[%s] Starting weed mount: %s %s", volumeID, command, strings.Join(args, " "))
 
@@ -282,15 +330,14 @@ func startWeedMountProcess(command string, args []string, target string, volumeI
 		return nil, fmt.Errorf("starting weed mount: %w", err)
 	}
 
-	// Forward stdout/stderr with volume ID prefix for better debugging
-	go forwardLogs(stdoutPipe, volumeID, "stdout")
-	go forwardLogs(stderrPipe, volumeID, "stderr")
-
 	process := &weedMountProcess{
 		cmd:    cmd,
 		target: target,
 		exited: make(chan struct{}),
 		done:   make(chan struct{}),
+		output: output,
+		stdout: stdout,
+		stderr: stderr,
 	}
 
 	if err := process.afterStart(); err != nil {
@@ -299,7 +346,13 @@ func startWeedMountProcess(command string, args []string, target string, volumeI
 
 	go process.wait()
 
-	if err := waitForMount(target, 10*time.Second); err != nil {
+	if err := waitForMount(target, mountWaitTimeout, process.exited); err != nil {
+		if errors.Is(err, errProcessExited) {
+			// Report the exit now rather than waiting out the timeout;
+			// wait() is already cleaning up the target.
+			<-process.done
+			return nil, process.exitedBeforeMount()
+		}
 		if stopErr := process.stop(); stopErr != nil {
 			glog.Warningf("[%s] failed to stop mount process after mount wait failure: %v", volumeID, stopErr)
 		}
@@ -309,8 +362,26 @@ func startWeedMountProcess(command string, args []string, target string, volumeI
 	return process, nil
 }
 
+// errProcessExited is returned by waitForMount when the weed mount process
+// exits before the mount comes up.
+var errProcessExited = errors.New("weed mount process exited")
+
+// exitedBeforeMount describes a weed mount process that exited before its
+// mount came up: its exit status and the first and last lines it printed.
+func (p *weedMountProcess) exitedBeforeMount() error {
+	status := "exit status 0"
+	if p.exitErr != nil {
+		status = p.exitErr.Error()
+	}
+	return fmt.Errorf("weed mount exited before mounting %s (%s): %s", p.target, status, p.output.summary())
+}
+
 func (p *weedMountProcess) wait() {
-	if err := p.cmd.Wait(); err != nil {
+	err := p.cmd.Wait()
+	p.stdout.flush()
+	p.stderr.flush()
+	p.exitErr = err
+	if err != nil {
 		glog.Errorf("weed mount exit (pid: %d, target: %s): %v", p.cmd.Process.Pid, p.target, err)
 	} else {
 		glog.Infof("weed mount exit (pid: %d, target: %s)", p.cmd.Process.Pid, p.target)
@@ -330,13 +401,90 @@ func (p *weedMountProcess) wait() {
 	close(p.done)
 }
 
-// forwardLogs reads from a pipe and logs each line with a volume ID prefix.
-func forwardLogs(pipe io.ReadCloser, volumeID string, stream string) {
-	scanner := bufio.NewScanner(pipe)
-	for scanner.Scan() {
-		glog.Infof("[%s] %s: %s", volumeID, stream, scanner.Text())
+// outputKeepLines is how many of the first and of the last output lines
+// processOutput keeps: the first carry a usage error or a fatal log line,
+// the last a panic or the final error.
+const outputKeepLines = 5
+
+// maxLineBytes splits an output line that never ends.
+const maxLineBytes = 64 * 1024
+
+// processOutput logs a weed mount's output with its volume ID and keeps
+// its first and last lines.
+type processOutput struct {
+	volumeID string
+
+	mu    sync.Mutex
+	head  []string
+	tail  []string
+	lines int
+}
+
+func (o *processOutput) add(stream, line string) {
+	glog.Infof("[%s] %s: %s", o.volumeID, stream, line)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.lines++
+	if len(o.head) < outputKeepLines {
+		o.head = append(o.head, line)
+		return
 	}
-	if err := scanner.Err(); err != nil {
-		glog.Warningf("[%s] error reading %s: %v", volumeID, stream, err)
+	o.tail = append(o.tail, line)
+	if len(o.tail) > outputKeepLines {
+		o.tail = o.tail[1:]
+	}
+}
+
+func (o *processOutput) summary() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.lines == 0 {
+		return "no output"
+	}
+	head := strings.Join(o.head, "\n")
+	if len(o.tail) == 0 {
+		return head
+	}
+	tail := strings.Join(o.tail, "\n")
+	if omitted := o.lines - len(o.head) - len(o.tail); omitted > 0 {
+		return fmt.Sprintf("%s\n... (%d lines omitted) ...\n%s", head, omitted, tail)
+	}
+	return head + "\n" + tail
+}
+
+// lineWriter splits one output stream into lines for processOutput.
+type lineWriter struct {
+	output *processOutput
+	stream string
+
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (w *lineWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			if len(w.buf) >= maxLineBytes {
+				w.output.add(w.stream, string(w.buf))
+				w.buf = w.buf[:0]
+			}
+			return len(p), nil
+		}
+		w.output.add(w.stream, strings.TrimSuffix(string(w.buf[:i]), "\r"))
+		w.buf = w.buf[i+1:]
+	}
+}
+
+// flush emits a final line that did not end in a newline.
+func (w *lineWriter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) > 0 {
+		w.output.add(w.stream, strings.TrimSuffix(string(w.buf), "\r"))
+		w.buf = nil
 	}
 }

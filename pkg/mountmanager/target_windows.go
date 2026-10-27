@@ -55,10 +55,10 @@ func cleanupDeadMountPoint(target string) {
 }
 
 // waitForMount polls until the target becomes a reparse point, i.e. the
-// WinFsp mount has been created by weed.exe, or the timeout elapses.
-// The path not existing yet or still being a plain directory both mean
-// "keep polling".
-func waitForMount(path string, timeout time.Duration) error {
+// WinFsp mount has been created by weed.exe, the process closes exited
+// (errProcessExited), or the timeout elapses. The path not existing yet or
+// still being a plain directory both mean "keep polling".
+func waitForMount(path string, timeout time.Duration, exited <-chan struct{}) error {
 	var elapsed time.Duration
 	interval := 10 * time.Millisecond
 
@@ -67,7 +67,11 @@ func waitForMount(path string, timeout time.Duration) error {
 			return nil
 		}
 
-		time.Sleep(interval)
+		select {
+		case <-exited:
+			return errProcessExited
+		case <-time.After(interval):
+		}
 		elapsed += interval
 		if elapsed >= timeout {
 			return errors.New("timeout waiting for mount")

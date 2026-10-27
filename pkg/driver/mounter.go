@@ -76,6 +76,9 @@ func (m *mountServiceMounter) Mount(target string) (Unmounter, error) {
 		CacheDir:    cacheDir,
 		MountArgs:   args,
 		LocalSocket: localSocket,
+		// The mount service drops flags its weed does not define unless
+		// they are required; this build's list reaches older services too.
+		RequiredFlags: mountmanager.RequiredMountFlags,
 	}
 
 	_, err = m.client.Mount(req)
