@@ -12,7 +12,7 @@ whose README describes the mount's own fixes, flags and benchmarks.
 - **Windows nodes**: HostProcess node plugin and mount supervisor running
   WinFsp `weed.exe mount` in network-FS mode (details below).
 - **Restart recovery**: the node plugin rediscovers staged volumes from
-  kubelet's `vol_data.json` (`--stagingScanDir`), including pod publish paths
+  kubelet's `vol_data.json` (`--stagingScanDir`, on by default), including pod publish paths
   of statically provisioned volumes (matched by volume handle), and its health
   monitor remounts dead FUSE mounts and re-binds them inside running
   containers without deleting pods. Stage and Publish succeed only on a
@@ -21,11 +21,18 @@ whose README describes the mount's own fixes, flags and benchmarks.
   longer than the mount's 60 s request bound; it is then stopped through the
   mount service and re-staged. `NodeGetVolumeStats` reports usage and a
   `VolumeCondition`, abnormal while a mount is dead or hung.
-- **Cache directories**: node startup removes only cache directories whose
-  volume is neither staged nor served by a running mount, instead of emptying
-  the whole cache base under live mounts. Starting a volume's mount removes
-  its other instance cache directories (weed names them after its version)
-  that no process holds open.
+- **Cache directories**: at startup and then hourly the node plugin removes
+  cache directories whose volume is neither staged (by the plugin or, per its
+  staging directory, by kubelet), being staged, nor served by a running mount,
+  instead of emptying the whole cache base under live mounts. A sweep that
+  would wait for a stage in progress skips its round. The shared chunk cache
+  `<cacheDir>/chunks` is always kept. Starting a volume's mount removes its
+  other instance cache directories (weed names them after its version) that
+  no process holds open.
+- **Platform defaults**: cache base and kubelet staging directory default to
+  the platform's paths, the node plugin creates its endpoint directory, and
+  the Windows mount service installs the pinned WinFsp itself, so the
+  DaemonSets need no init containers or path flags.
 - **Write buffer cap**: `--writeBufferSizeMB` caps every mount's dirty data,
   so `close()` and `fsync()` drain within the mount's request deadline.
 - **Per-volume mount options** from StorageClass parameters or static PV
@@ -39,12 +46,12 @@ Node plugin flags set the default for every mount on the node:
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--cacheDir` | system temp | Base of per-volume cache directories, `<cacheDir>/<sha256 of volume id>`. |
+| `--cacheDir` | `/var/cache/seaweedfs`, `C:\var\cache\seaweedfs` | Base of per-volume cache directories, `<cacheDir>/<sha256 of volume id>`, and of the node's shared chunk cache `<cacheDir>/chunks`. |
 | `--cacheCapacityMB` | 0 | Each mount's on-disk read cache (`weed mount -cacheCapacityMB`); `0` disables it. |
 | `--writeBufferSizeMB` | 0 (no cap) | Each mount's dirty-data cap, memory plus swap. |
 | `--concurrentWriters`, `--concurrentReaders` | 128 | Upload and chunk-fetch concurrency per mount. |
 | `--cacheMetaTtlSec` | 60 | Metadata cache TTL. |
-| `--stagingScanDir` | empty | Kubelet `plugins/kubernetes.io/csi` directory to scan for staged volumes at startup. Keep it set. |
+| `--stagingScanDir` | `/var/lib/kubelet/plugins/kubernetes.io/csi`, `C:\var\lib\kubelet\plugins\kubernetes.io\csi` | Kubelet `plugins/kubernetes.io/csi` directory scanned for staged volumes at startup; the cache sweep also keeps a cache while kubelet's staging directory for it exists. Set it when kubelet has another root (k0s: `/var/lib/k0s/kubelet/...`); empty disables both. |
 
 A StorageClass parameter, or a static PV's `volumeAttributes`, overrides the
 node default for that volume: `cacheCapacityMB`, `writeBufferSizeMB`,
@@ -52,7 +59,9 @@ node default for that volume: `cacheCapacityMB`, `writeBufferSizeMB`,
 `winfspOptions`, `replication`, `collection`, `diskType`, `dataCenter`,
 `dataLocality`, `ttl`, `chunkSizeLimitMB`, `volumeServerAccess`,
 `readRetryTime`, `uidMap`, `gidMap` and `path`. Unknown keys are logged and
-ignored. A dynamically provisioned PV records its StorageClass parameters when
+ignored. `sharedChunkCacheDir` is node-local and always `<cacheDir>/chunks`:
+a StorageClass or PV value is ignored, and a VolumeAttributesClass cannot set
+it. A dynamically provisioned PV records its StorageClass parameters when
 it is created, and PV volume attributes are immutable: changing a
 StorageClass affects only volumes provisioned afterwards.
 
@@ -70,7 +79,8 @@ node takes 80.4 s to write and 8.8 s to `close()` (46 MB/s); 256 MiB at
 ## Images and CI
 
 `build-images.yml` runs on pushes and pull requests to the default branch and
-`merge/**`: race unit tests, native Windows tests, then Linux and Windows
+`merge/**`: race unit tests, native Windows tests (which install the pinned
+WinFsp MSI on the hosted runner through the mount service's installer), then Linux and Windows
 (ltsc2022) images for `ghcr.io/appmana/seaweedfs-csi-driver` and
 `ghcr.io/appmana/seaweedfs-mount`, published as multi-platform manifests
 tagged `candidate-<sha>-<run>-<attempt>`. `SEAWEEDFS_COMMIT` (Linux) and
@@ -79,7 +89,31 @@ mount Dockerfiles must carry the same pin, and
 `test/kubernetes_lab/build_pins_test.go` requires that, a static
 (`CGO_ENABLED=0`) large-disk (`5BytesOffset`) build and a stamped
 `weed version`. Deploy candidates by digest after qualification; never
-rebuild or retag a deployed image.
+rebuild a deployed image or move a release tag.
+
+### Releases
+
+A release is a qualified candidate's exact images under a readable tag,
+`v<upstream base>-appmana.post.<n>`: the upstream release the fork last
+merged (`git describe --tags`, v1.4.34 since `merge/upstream-csi-master`) and
+a counter that restarts at 1 for each new upstream base. Earlier lines:
+`v1.4.12-appmana.post.1` to `.post.20`, `v1.4.26-appmana.post.1` and `.post.2`.
+[RELEASES.md](RELEASES.md) lists what each release contains and its digests.
+
+To release a candidate built from a commit on the default branch:
+
+1. Add its `## v…-appmana.post.<n>` section to RELEASES.md, naming the
+   candidate's source commit, and push it to the default branch.
+2. Run the **Promote a CI candidate to a release** workflow
+   (`promote-release.yml`) with the release and candidate tags. It adds the
+   release tag to the candidate's manifest list and to each per-platform
+   image (`-linux-amd64`, `-windows-ltsc2022`) with `crane tag`, refuses to
+   move an existing release tag, tags the source commit in git, and prints
+   the pins.
+
+Deployments pin `repository:<release tag>[-<platform>]@sha256:<digest>`: the
+tag says which release runs, the digest keeps the pin immutable (the runtime
+pulls by digest). Linux and Windows DaemonSets pin the per-platform images.
 
 The bundled `weed`/`weed.exe` binaries are the large-disk build (5-byte
 needle offsets for 8 TB volume files), matching servers that run
@@ -123,18 +157,24 @@ How it works on Windows:
   console ctrl event for clean unmounts; staged volumes are rediscovered from
   kubelet's `vol_data.json` after plugin restarts (`--stagingScanDir`) and
   re-staged by the health monitor.
-- WinFsp is installed on the host idempotently by an initContainer from the
-  MSI shipped in the mount image.
+- The mount service installs WinFsp on the host when it starts, from the MSI
+  shipped in the mount image (below).
 
-The Windows mount image currently pins upstream WinFsp **2.1.25156** using
+The Windows mount image pins upstream WinFsp **2.1.25156** using
 `WINFSP_MSI_URL` and `WINFSP_MSI_SHA256` in
-`cmd/seaweedfs-mount/Dockerfile.Windows`. WinFsp's DLL and kernel driver are
-host-installed components in the default image. The optional `dll-only` target
-instead places a hash-pinned DLL beside `weed.exe` in the mount HostProcess
-image; it retains the official MSI and does not replace the host kernel driver.
-The bootstrap shown below only checks for an existing registry key: it does
-**not** verify or upgrade an existing installation when the image changes.
-Do not use a DaemonSet image rollout as a driver-upgrade mechanism.
+`cmd/seaweedfs-mount/Dockerfile.Windows`, and ships the released user-mode DLL
+beside `weed.exe`. Before it accepts mounts, `seaweedfs-mount.exe` checks
+`HKLM\SOFTWARE\WOW6432Node\WinFsp`; when WinFsp is missing it copies
+`winfsp.msi` from beside the executable to `%SystemRoot%\Temp` (the Windows
+Installer service cannot read the HostProcess sandbox mount, exit 1619), runs
+`msiexec /i … /qn INSTALLLEVEL=1000 /l*v %SystemRoot%\Temp\seaweedfs-winfsp-install.log`,
+and fails startup on a non-zero exit, naming the log. It then requires the
+installed version (the WinFsp entry's `DisplayVersion` under the Windows
+Installer uninstall keys) to be 2.1.25156, the driver the shipped DLL is built
+for, and fails startup on any other version. It never upgrades or replaces an
+installed WinFsp: do not use a DaemonSet image rollout as a driver-upgrade
+mechanism. `--winfspMSI` names another MSI; `--winfspVersion=` (empty) accepts
+any installed version, for the lab's kernel-driver candidate lane only.
 
 [AppMana/forks-winfsp-fixes](https://github.com/AppMana/forks-winfsp-fixes)
 contains the candidate fixes and isolated native-VM qualification harness.
@@ -224,7 +264,9 @@ credentials come from the normal `crane` credential configuration.
 
 Deploy the upstream controller, StorageClass and Linux DaemonSets as usual
 (`deploy/kubernetes/seaweedfs-csi.yaml`), then add the two Windows
-DaemonSets. Minimal example (adjust the filer address and images):
+DaemonSets. Minimal example (adjust the filer address and images; kubelet's
+root is assumed to be `C:\var\lib\kubelet`, otherwise set
+`--stagingScanDir`):
 
 ```yaml
 apiVersion: apps/v1
@@ -245,20 +287,9 @@ spec:
       hostNetwork: true
       priorityClassName: system-node-critical
       serviceAccountName: seaweedfs-node-sa
-      initContainers:
-        - name: install-winfsp
-          image: ghcr.io/appmana/seaweedfs-mount@sha256:<qualified digest>
-          command: ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command"]
-          args:
-            - >-
-              if (-not (Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) {
-              Copy-Item "$env:CONTAINER_SANDBOX_MOUNT_POINT\winfsp.msi" 'C:\Windows\Temp\winfsp.msi' -Force ;
-              $p = Start-Process msiexec -Wait -PassThru -ArgumentList '/i','C:\Windows\Temp\winfsp.msi','/qn','INSTALLLEVEL=1000' ;
-              if ($p.ExitCode -ne 0) { exit 1 } } ;
-              New-Item -ItemType Directory -Force -Path C:\var\lib\seaweedfs-mount, C:\var\cache\seaweedfs | Out-Null
       containers:
         - name: seaweedfs-mount
-          image: ghcr.io/appmana/seaweedfs-mount@sha256:<qualified digest>
+          image: ghcr.io/appmana/seaweedfs-mount:<release>-windows-ltsc2022@sha256:<digest>
           command: ["$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-mount.exe"]
           args: ["--endpoint=unix://C:\\var\\lib\\seaweedfs-mount\\seaweedfs-mount.sock"]
 ---
@@ -282,7 +313,7 @@ spec:
       serviceAccountName: seaweedfs-node-sa
       containers:
         - name: csi-seaweedfs-plugin
-          image: ghcr.io/appmana/seaweedfs-csi-driver@sha256:<qualified digest>
+          image: ghcr.io/appmana/seaweedfs-csi-driver:<release>-windows-ltsc2022@sha256:<digest>
           command: ["$env:CONTAINER_SANDBOX_MOUNT_POINT/seaweedfs-csi-driver.exe"]
           args:
             - --endpoint=unix://C:\var\lib\kubelet\plugins\seaweedfs-csi-driver\csi.sock
@@ -292,9 +323,7 @@ spec:
             - --nodeid=$(NODE_ID)
             - --driverName=seaweedfs-csi-driver
             - --mountEndpoint=unix://C:\var\lib\seaweedfs-mount\seaweedfs-mount.sock
-            - --cacheDir=C:\var\cache\seaweedfs
             - --cacheCapacityMB=51200
-            - --stagingScanDir=C:\var\lib\kubelet\plugins\kubernetes.io\csi
             - --components=node
           env:
             - name: NODE_ID

@@ -1,0 +1,59 @@
+name: Promote a CI candidate to a release
+
+# A release is a candidate's exact bytes under a readable tag; nothing is
+# built here. Run after the candidate passed CI and its qualification, with
+# a RELEASES.md section for the release on the default branch.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Release tag, v<upstream base>-appmana.post.<n>
+        required: true
+      candidate:
+        description: Candidate tag from build-images.yml, candidate-<sha>-<run>-<attempt>
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: promote-release
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: imjasonh/setup-crane@v0.4
+      - name: Release only mainline commits
+        env:
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          set -euo pipefail
+          sha="$(sed -nE 's/^candidate-([0-9a-f]{40})-[0-9]+-[0-9]+$/\1/p' <<<"$CANDIDATE")"
+          test -n "$sha" || { echo "not a candidate tag: $CANDIDATE" >&2; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/appmana/windows-v1.4.12
+          echo "SOURCE_SHA=$sha" >> "$GITHUB_ENV"
+      - name: Tag the candidate images
+        env:
+          RELEASE: ${{ inputs.release }}
+          CANDIDATE: ${{ inputs.candidate }}
+        run: |
+          set -euo pipefail
+          crane auth login ghcr.io -u "${{ github.actor }}" -p "${{ secrets.GITHUB_TOKEN }}"
+          python3 hack/release/promote.py --release "$RELEASE" --candidate "$CANDIDATE" --notes RELEASES.md
+      - name: Tag the source commit
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          if existing="$(git rev-parse -q --verify "refs/tags/$RELEASE^{commit}")"; then
+            test "$existing" = "$SOURCE_SHA" || { echo "git tag $RELEASE names $existing" >&2; exit 1; }
+            exit 0
+          fi
+          git tag "$RELEASE" "$SOURCE_SHA"
+          git push origin "refs/tags/$RELEASE"

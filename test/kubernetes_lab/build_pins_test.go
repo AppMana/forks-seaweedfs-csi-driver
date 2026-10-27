@@ -156,3 +156,55 @@ func TestWindowsImageShipsPinnedWinFspDLL(t *testing.T) {
 		t.Fatalf("the default image must add the released DLL beside /weed.exe:\n%s", last)
 	}
 }
+
+// Releases are promotions of a candidate's bytes: the release workflow tags
+// what CI built and never builds, and it only releases mainline commits.
+func TestReleaseWorkflowPromotesWithoutRebuilding(t *testing.T) {
+	b, err := os.ReadFile("../../.github/workflows/promote-release.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := string(b)
+	for _, required := range []string{
+		"workflow_dispatch:",
+		"python3 hack/release/promote.py --release",
+		"git merge-base --is-ancestor",
+		"origin/appmana/windows-v1.4.12",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("promote-release.yml missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"docker buildx build", "docker build ", "crane push", "crane copy"} {
+		if strings.Contains(workflow, forbidden) {
+			t.Errorf("promote-release.yml must not %q", forbidden)
+		}
+	}
+}
+
+// The hosted Windows job installs the pinned WinFsp MSI through the mount
+// service's own installer; the MSI it downloads is the image's pin.
+func TestWindowsJobInstallsTheImageWinFspPin(t *testing.T) {
+	workflow, err := os.ReadFile("../../.github/workflows/build-images.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dockerfile, err := os.ReadFile("../../cmd/seaweedfs-mount/Dockerfile.Windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, arg := range []string{"WINFSP_MSI_URL", "WINFSP_MSI_SHA256"} {
+		m := regexp.MustCompile(`(?m)^ARG ` + arg + `=(\S+)$`).FindStringSubmatch(string(dockerfile))
+		if m == nil {
+			t.Fatalf("Dockerfile.Windows has no %s", arg)
+		}
+		if !strings.Contains(string(workflow), m[1]) {
+			t.Errorf("build-images.yml test-windows does not use %s %s", arg, m[1])
+		}
+	}
+	for _, required := range []string{"SEAWEEDFS_TEST_WINFSP_MSI", "'TestEnsureWinFspInstallsPinnedMSI'"} {
+		if !strings.Contains(string(workflow), required) {
+			t.Errorf("build-images.yml missing %q", required)
+		}
+	}
+}

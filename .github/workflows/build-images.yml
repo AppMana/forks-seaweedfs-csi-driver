@@ -61,6 +61,8 @@ jobs:
         run: go test -race -count=1 ./...
       - name: Exact-image packaging verifier and negative controls
         run: python3 -m unittest discover -s test/kubernetes_lab -p 'test_*.py' -v
+      - name: Release promotion contracts
+        run: python3 -m unittest discover -s hack/release -p 'test_*.py' -v
       - name: Cross-compile gate (windows/amd64)
         run: |
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
@@ -78,7 +80,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Native windows unit tests (AF_UNIX canary, symlink publish, process supervision)
+      - name: Download the mount image's pinned WinFsp MSI
+        # Same pin as cmd/seaweedfs-mount/Dockerfile.Windows. The runner has
+        # no WinFsp; the mount service's installer installs it below.
+        run: |
+          $msi = Join-Path $env:RUNNER_TEMP 'winfsp.msi'
+          Invoke-WebRequest -Uri 'https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi' -OutFile $msi
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $msi).Hash
+          if ($hash -ine '073a70e00f77423e34bed98b86e600def93393ba5822204fac57a29324db9f7a') {
+            throw "WinFsp MSI checksum mismatch: $hash"
+          }
+          "SEAWEEDFS_TEST_WINFSP_MSI=$msi" >> $env:GITHUB_ENV
+      - name: Native windows unit tests (AF_UNIX canary, symlink publish, process supervision, WinFsp install, platform defaults)
         run: |
           $log = Join-Path $env:RUNNER_TEMP 'windows-go-test.json'
           & go test -count=1 -json ./pkg/driver/ ./pkg/mountmanager/ |
@@ -103,7 +116,16 @@ jobs:
             'TestDefaultBindMountReplacesEmptyDir',
             'TestConfigureCmdSetsProcessGroup',
             'TestStopKillsChild',
-            'TestUnixSocketRoundTrip'
+            'TestUnixSocketRoundTrip',
+            'TestEnsureWinFspInstallsPinnedMSI',
+            'TestWinFspInstallerInstallsFromAHostVisibleCopy',
+            'TestWinFspInstallerRefusesAnotherInstalledVersion',
+            'TestPinnedWinFspVersionMatchesTheImageMSI',
+            'TestPlatformDefaults',
+            'TestPrepareUnixEndpointCreatesDirectoryAndRemovesStaleSocket',
+            'TestNodeServerSweepsOrphanCachesWhileRunning',
+            'TestCacheSweepKeepsCacheWhileKubeletHasTheVolumeStaged',
+            'TestBuildMountArgsSharedChunkDirIgnoresVolumeContext'
           )
           $passed = @($events | Where-Object { $_.Action -eq 'pass' -and $_.Test } | ForEach-Object Test)
           $missing = @($required | Where-Object { $_ -notin $passed })

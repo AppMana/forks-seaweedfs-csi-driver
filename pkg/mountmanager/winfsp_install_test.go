@@ -179,6 +179,8 @@ func TestPinnedWinFspVersionMatchesTheImageMSI(t *testing.T) {
 	}
 	want := "/winfsp-" + PinnedWinFspVersion + ".msi"
 	for _, line := range strings.Split(string(dockerfile), "\n") {
+		// Windows checkouts may convert line endings.
+		line = strings.TrimRight(line, "\r")
 		if strings.HasPrefix(line, "ARG WINFSP_MSI_URL=") {
 			if !strings.HasSuffix(line, want) {
 				t.Fatalf("%s does not install WinFsp %s", line, PinnedWinFspVersion)
