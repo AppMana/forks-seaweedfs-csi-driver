@@ -178,6 +178,9 @@ func nodePodForQualification(platform string, mount, candidate bool) core.Pod {
 				// Never let image initialization replace it with the stock MSI.
 				prepare = `if (!(Test-Path 'HKLM:\SOFTWARE\WOW6432Node\WinFsp')) { throw 'prepared candidate WinFsp installation missing' };`
 				name = "require-candidate"
+				// The candidate is not the pinned stock version the mount
+				// service otherwise requires.
+				p.Spec.Containers[0].Args = append(p.Spec.Containers[0].Args, "--winfspVersion=")
 			}
 			prepare += ` New-Item -ItemType Directory -Force C:\LabInputs,C:\var\lib\seaweedfs-mount,C:\var\cache\seaweedfs | Out-Null;`
 			p.Spec.InitContainers = []core.Container{container(name, image, ps(prepare))}

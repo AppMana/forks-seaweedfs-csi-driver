@@ -20,6 +20,7 @@ type WinFspInstaller struct {
 	// MSI is the installer inside the image.
 	MSI string
 	// Version is the WinFsp version MSI installs, which the host must run.
+	// Empty accepts any installed version (lab kernel-driver candidates).
 	Version string
 	// StagingDir is a host directory msiexec can read. The Windows Installer
 	// service runs outside the HostProcess container's silo and cannot open
@@ -72,7 +73,7 @@ func (w WinFspInstaller) Ensure() error {
 }
 
 func (w WinFspInstaller) requireVersion(installed string) error {
-	if installed != w.Version {
+	if w.Version != "" && installed != w.Version {
 		return fmt.Errorf("host runs WinFsp %q, but this mount image ships the DLL for WinFsp %s; install WinFsp %s on the host", installed, w.Version, w.Version)
 	}
 	return nil

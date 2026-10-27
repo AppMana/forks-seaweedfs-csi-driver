@@ -88,15 +88,16 @@ func runMsiexec(args ...string) (int, error) {
 }
 
 // EnsureWinFsp installs WinFsp from msi unless the host has it, staging the
-// package in the Windows temp directory.
-func EnsureWinFsp(msi string) error {
+// package in the Windows temp directory, and requires the installed version
+// to be version (empty accepts any).
+func EnsureWinFsp(msi, version string) error {
 	systemRoot := os.Getenv("SystemRoot")
 	if systemRoot == "" {
 		systemRoot = `C:\Windows`
 	}
 	return WinFspInstaller{
 		MSI:        msi,
-		Version:    PinnedWinFspVersion,
+		Version:    version,
 		StagingDir: filepath.Join(systemRoot, "Temp"),
 		Installed:  winFspInstalled,
 		RunMsiexec: runMsiexec,

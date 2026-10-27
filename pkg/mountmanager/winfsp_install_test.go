@@ -188,3 +188,14 @@ func TestPinnedWinFspVersionMatchesTheImageMSI(t *testing.T) {
 	}
 	t.Fatal("Dockerfile.Windows has no WINFSP_MSI_URL")
 }
+
+// The lab's kernel-candidate lane installs a candidate WinFsp before the
+// mount starts; with no required version the installed one is accepted.
+func TestWinFspInstallerWithoutARequiredVersionAcceptsTheInstalledOne(t *testing.T) {
+	host := &fakeWinFspHost{installed: []bool{true}, version: "2.1.99999"}
+	installer, _ := newTestInstaller(t, host)
+	installer.Version = ""
+	if err := installer.Ensure(); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+}

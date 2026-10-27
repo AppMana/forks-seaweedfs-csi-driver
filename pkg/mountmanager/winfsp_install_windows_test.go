@@ -23,7 +23,7 @@ func TestEnsureWinFspInstallsPinnedMSI(t *testing.T) {
 	if installed {
 		t.Fatal("WinFsp is already installed on this host, so the install path would not run")
 	}
-	if err := EnsureWinFsp(msi); err != nil {
+	if err := EnsureWinFsp(msi, PinnedWinFspVersion); err != nil {
 		t.Fatalf("EnsureWinFsp: %v", err)
 	}
 	version, installed, err := winFspInstalled()
@@ -35,7 +35,7 @@ func TestEnsureWinFspInstallsPinnedMSI(t *testing.T) {
 		t.Fatalf("WinFsp DLL missing after install: %v", err)
 	}
 	// A second start finds it installed and does not run msiexec again.
-	if err := EnsureWinFsp(filepath.Join(t.TempDir(), "absent.msi")); err != nil {
+	if err := EnsureWinFsp(filepath.Join(t.TempDir(), "absent.msi"), PinnedWinFspVersion); err != nil {
 		t.Fatalf("EnsureWinFsp on an installed host: %v", err)
 	}
 }

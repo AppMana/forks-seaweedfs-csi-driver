@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -171,6 +172,11 @@ func TestCandidateInitializationCannotInstallStockWinFsp(t *testing.T) {
 	stock := nodePodForQualification("windows", true, false)
 	if len(candidate.Spec.InitContainers) != 3 || candidate.Spec.InitContainers[0].Name != "require-candidate" {
 		t.Fatalf("candidate init is not fail-closed: %+v", candidate.Spec.InitContainers)
+	}
+	// The mount service requires the pinned stock WinFsp version unless told
+	// otherwise; the prepared candidate is another build.
+	if !slices.Contains(candidate.Spec.Containers[0].Args, "--winfspVersion=") || slices.Contains(stock.Spec.Containers[0].Args, "--winfspVersion=") {
+		t.Fatalf("only the candidate mount may accept any WinFsp version: candidate %q, stock %q", candidate.Spec.Containers[0].Args, stock.Spec.Containers[0].Args)
 	}
 	candidateScript := decodedPowerShell(t, candidate.Spec.InitContainers[0].Command)
 	if strings.Contains(strings.ToLower(candidateScript), "winfsp.msi") || strings.Contains(candidateScript, "Start-Process") {
