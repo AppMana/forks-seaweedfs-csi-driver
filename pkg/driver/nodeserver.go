@@ -62,6 +62,11 @@ type NodeServer struct {
 	// from piling up new recovery goroutines on top of a hung one.
 	activeRecoveries sync.Map // map[string]struct{}
 
+	// cacheMu orders the cache sweep against staging: a stage holds it for
+	// reading until its volume is recorded in volumes, the sweep for
+	// writing while it picks orphaned cache directories.
+	cacheMu sync.RWMutex
+
 	// Injectable factories / operations (overridden in tests).
 	mounterFactory    MounterFactory
 	capacityFn        CapacityFn
@@ -137,6 +142,9 @@ func (ns *NodeServer) NodeStageVolume(ctx context.Context, req *csi.NodeStageVol
 	volumeMutex := ns.getVolumeMutex(volumeID)
 	volumeMutex.Lock()
 	defer volumeMutex.Unlock()
+	// Until the volume is recorded as staged, only this keeps the cache
+	// sweep off the cache its starting mount writes.
+	defer ns.holdCaches()()
 
 	// The volume has been staged and is in memory cache.
 	if _, ok := ns.volumes.Load(volumeID); ok {
@@ -258,13 +266,16 @@ func (ns *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublis
 			volContext := req.GetVolumeContext()
 			readOnly := isPublishVolumeReadOnly(req)
 
+			releaseCaches := ns.holdCaches()
 			newVolume, err := ns.stageNewVolume(volumeID, stagingTargetPath, volContext, readOnly)
 			if err != nil {
+				releaseCaches()
 				ns.removeVolumeMutex(volumeID)
 				return nil, status.Errorf(codes.Internal, "failed to re-stage volume: %v", err)
 			}
 
 			ns.volumes.Store(volumeID, newVolume)
+			releaseCaches()
 			volume = newVolume
 			glog.Infof("volume %s successfully re-staged to %s", volumeID, stagingTargetPath)
 		}

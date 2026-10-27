@@ -48,12 +48,14 @@ func NewNodeServer(n *SeaweedFsDriver) *NodeServer {
 	ns.recoverStagedVolumesFromDisk(n.StagingScanDir)
 	ns.removeOrphanCacheDirs()
 	ns.startHealthMonitor(defaultHealthCheckInterval)
+	ns.startCacheSweeper(cacheSweepInterval)
 	return ns
 }
 
 // removeOrphanCacheDirs deletes cache directories that no mount can still be
-// using. A directory is kept when its volume is staged on this node or when a
-// weed mount process accepts connections on the volume's local socket.
+// using. A directory is kept when its volume is staged on this node, is being
+// staged, or when a weed mount process accepts connections on the volume's
+// local socket. The shared chunk cache is always kept.
 func (ns *NodeServer) removeOrphanCacheDirs() {
 	if ns.Driver.CacheDir == "" {
 		return
@@ -62,6 +64,24 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 	if cacheBase == filepath.Clean(os.TempDir()) {
 		return
 	}
+	// Deleting a large cache takes long; only moving it aside needs the
+	// lock, so stages wait for the decision, not for the deletion.
+	for _, dir := range ns.detachOrphanCacheDirs(cacheBase) {
+		if err := os.RemoveAll(dir); err != nil {
+			glog.Warningf("error removing orphan cache dir %s: %v", dir, err)
+		}
+	}
+}
+
+// removingCachePrefix names a cache directory the sweep moved aside for
+// deletion; one whose deletion failed is retried by the next sweep.
+const removingCachePrefix = ".removing-"
+
+// detachOrphanCacheDirs renames every orphaned cache directory under
+// cacheBase aside and returns the paths to delete.
+func (ns *NodeServer) detachOrphanCacheDirs(cacheBase string) []string {
+	ns.cacheMu.Lock()
+	defer ns.cacheMu.Unlock()
 	keep := map[string]struct{}{}
 	ns.volumes.Range(func(key, _ any) bool {
 		keep[filepath.Base(GetCacheDir(cacheBase, key.(string)))] = struct{}{}
@@ -72,12 +92,17 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 		if !os.IsNotExist(err) {
 			glog.Warningf("cannot read cache dir %s: %v", cacheBase, err)
 		}
-		return
+		return nil
 	}
+	var detached []string
 	for _, e := range entries {
 		name := e.Name()
 		if name == sharedChunkCacheDirName {
 			// Preserve the shared node-wide read chunk cache directory across mounts and modalities.
+			continue
+		}
+		if strings.HasPrefix(name, removingCachePrefix) {
+			detached = append(detached, filepath.Join(cacheBase, name))
 			continue
 		}
 		if _, staged := keep[name]; staged {
@@ -87,10 +112,15 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 			glog.Infof("keeping cache dir %s of a mount the mount service is serving", name)
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(cacheBase, name)); err != nil {
-			glog.Warningf("error removing orphan cache dir %s: %v", name, err)
+		aside := filepath.Join(cacheBase, fmt.Sprintf("%s%s-%d", removingCachePrefix, name, time.Now().UnixNano()))
+		if err := os.Rename(filepath.Join(cacheBase, name), aside); err != nil {
+			glog.Warningf("cannot move orphan cache dir %s aside: %v", name, err)
+			continue
 		}
+		glog.Infof("removing orphan cache dir %s", name)
+		detached = append(detached, aside)
 	}
+	return detached
 }
 
 // isCacheOfServedMount reports whether a weed mount accepts connections on
