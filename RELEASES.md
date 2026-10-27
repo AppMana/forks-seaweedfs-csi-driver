@@ -36,10 +36,13 @@ add around the driver into the driver:
   Replaces a separate cache GC.
 - Releases: `promote-release.yml` promotes candidates to these tags.
 
-Compatibility: either side of a node may run post.1 while the other runs
-post.2 (both DaemonSets roll OnDelete). The mount request API and required
-flags are unchanged; a post.2 node plugin's `-sharedChunkCacheDir` is defined
-by post.1's weed.
+Compatibility (both DaemonSets roll OnDelete): roll a node's mount pod
+before its node plugin. A post.2 mount serves any older node plugin (the
+request API and required flags are unchanged). A post.2 node plugin always
+sends `-sharedChunkCacheDir`, which post.1's weed defines and which a mount
+service from post.1 on drops if its weed did not; a mount service older than
+post.1 (for example weed 6a5705033, a2dcf6643, or the Windows image at
+`sha256:e13505d9…`) fails every new mount on that flag.
 
 Qualification: CI run 40558255116 (race unit tests; native Windows tests,
 including a real install of the pinned MSI through the mount service's
