@@ -406,3 +406,16 @@ func TestControllerModifyVolume_FailsWhenPvAttributesUnreadable(t *testing.T) {
 		t.Fatalf("failed modify must not be persisted: %v", store.data)
 	}
 }
+
+// The shared chunk cache directory is node-local; a VolumeAttributesClass
+// cannot move it.
+func TestControllerModifyVolume_RejectsSharedChunkCacheDir(t *testing.T) {
+	cs, _ := modifyTestDriver()
+	_, err := cs.ControllerModifyVolume(context.Background(), &csi.ControllerModifyVolumeRequest{
+		VolumeId:          "pvc-abc",
+		MutableParameters: map[string]string{"sharedChunkCacheDir": "/elsewhere"},
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v, want InvalidArgument", status.Code(err))
+	}
+}

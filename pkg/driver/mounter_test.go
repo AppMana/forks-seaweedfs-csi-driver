@@ -1,6 +1,7 @@
 package driver
 
 import (
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -219,29 +220,60 @@ func TestBuildMountArgsWriteBufferSize(t *testing.T) {
 }
 
 func TestBuildMountArgsWholeCacheAndSharedChunkDir(t *testing.T) {
+	cacheBase := filepath.FromSlash("/srv/seaweedfs-cache")
 	m := &mountServiceMounter{
 		driver: &SeaweedFsDriver{
 			CacheCapacityMB: 10240,
+			CacheDir:        cacheBase,
 		},
 		volumeID: "/buckets/pvc-shared",
 		volContext: map[string]string{
 			"wholeCacheCapacityMB": "51200",
-			"sharedChunkCacheDir":  "/var/cache/seaweedfs/chunks",
 			"readerCacheSizeMB":    "512",
 		},
 	}
-	args, err := m.buildMountArgs("/staging", "/var/cache/seaweedfs/abc", "/socket", []string{"filer:8888"})
+	args, err := m.buildMountArgs("/staging", filepath.Join(cacheBase, "abc"), "/socket", []string{"filer:8888"})
 	if err != nil {
 		t.Fatalf("buildMountArgs: %v", err)
 	}
 	for _, want := range []string{
 		"-cacheCapacityMB=10240",
 		"-wholeCacheCapacityMB=51200",
-		"-sharedChunkCacheDir=/var/cache/seaweedfs/chunks",
+		"-sharedChunkCacheDir=" + filepath.Join(cacheBase, "chunks"),
 		"-readerCacheSizeMB=512",
 	} {
 		if !slices.Contains(args, want) {
 			t.Fatalf("missing %s in %v", want, args)
 		}
+	}
+}
+
+// The shared chunk cache is a node-local directory under the node's cache
+// base. A StorageClass is cluster-wide and serves Linux and Windows nodes
+// alike, so a path in the volume context (a Linux path on a Windows node, or
+// a directory outside the cache base the orphan sweep manages) never decides
+// where it lives.
+func TestBuildMountArgsSharedChunkDirIgnoresVolumeContext(t *testing.T) {
+	cacheBase := filepath.FromSlash("/srv/seaweedfs-cache")
+	m := &mountServiceMounter{
+		driver:   &SeaweedFsDriver{CacheDir: cacheBase},
+		volumeID: "/buckets/pvc-shared",
+		volContext: map[string]string{
+			"sharedChunkCacheDir": "/var/cache/seaweedfs/chunks",
+		},
+	}
+	args, err := m.buildMountArgs("/staging", filepath.Join(cacheBase, "abc"), "/socket", []string{"filer:8888"})
+	if err != nil {
+		t.Fatalf("buildMountArgs: %v", err)
+	}
+	want := "-sharedChunkCacheDir=" + filepath.Join(cacheBase, "chunks")
+	var got []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-sharedChunkCacheDir=") {
+			got = append(got, arg)
+		}
+	}
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("sharedChunkCacheDir args = %v, want [%s]", got, want)
 	}
 }

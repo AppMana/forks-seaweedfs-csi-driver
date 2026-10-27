@@ -76,7 +76,7 @@ func (ns *NodeServer) removeOrphanCacheDirs() {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if name == "chunks" {
+		if name == sharedChunkCacheDirName {
 			// Preserve the shared node-wide read chunk cache directory across mounts and modalities.
 			continue
 		}
@@ -109,6 +109,18 @@ func isCacheOfServedMount(socketDir, cacheDirName string) bool {
 	}
 	conn.Close()
 	return true
+}
+
+// sharedChunkCacheDirName is the node-wide chunk cache every mount on the node
+// shares, directly under the cache base.
+const sharedChunkCacheDirName = "chunks"
+
+// SharedChunkCacheDir is the node-wide chunk cache directory under cacheBase.
+func SharedChunkCacheDir(cacheBase string) string {
+	if cacheBase == "" {
+		cacheBase = os.TempDir()
+	}
+	return filepath.Join(cacheBase, sharedChunkCacheDirName)
 }
 
 func GetCacheDir(cacheBase, volumeID string) string {

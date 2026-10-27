@@ -437,7 +437,6 @@ var mutableMountParameters = map[string]struct{}{
 	"concurrentWriters":    {},
 	"cacheCapacityMB":      {},
 	"wholeCacheCapacityMB": {},
-	"sharedChunkCacheDir":  {},
 	"readerCacheSizeMB":    {},
 	"cacheMetaTtlSec":      {},
 	"writebackCache":       {},

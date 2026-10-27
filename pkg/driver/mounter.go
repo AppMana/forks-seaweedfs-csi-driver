@@ -140,6 +140,7 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 		fmt.Sprintf("-dir=%s", targetPath),
 		fmt.Sprintf("-localSocket=%s", localSocket),
 		fmt.Sprintf("-cacheDir=%s", cacheDir),
+		fmt.Sprintf("-sharedChunkCacheDir=%s", SharedChunkCacheDir(m.driver.CacheDir)),
 	)
 
 	if m.readOnly {
@@ -154,7 +155,6 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 		"filer.path":         filerPath,
 		"cacheCapacityMB":      strconv.Itoa(m.driver.CacheCapacityMB),
 		"wholeCacheCapacityMB": "",
-		"sharedChunkCacheDir":  "",
 		"readerCacheSizeMB":    "",
 		"cacheMetaTtlSec":      strconv.Itoa(m.driver.CacheMetaTtlSec),
 		"concurrentReaders":  strconv.Itoa(m.driver.ConcurrentReaders),
@@ -218,6 +218,12 @@ func (m *mountServiceMounter) buildMountArgs(targetPath, cacheDir, localSocket s
 
 	for key, value := range volumeContext {
 		if _, ignored := ignoredArgs[key]; ignored {
+			continue
+		}
+		if key == "sharedChunkCacheDir" {
+			// Node-local: always <cacheDir>/chunks on this node. Volumes
+			// provisioned from a class that named a path still carry it.
+			glog.V(1).Infof("volume %s: ignoring volume context sharedChunkCacheDir %q, the node uses %s", m.volumeID, value, SharedChunkCacheDir(m.driver.CacheDir))
 			continue
 		}
 		if mapped, ok := parameterArgMap[key]; ok {
