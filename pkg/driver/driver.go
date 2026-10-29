@@ -62,6 +62,13 @@ type SeaweedFsDriver struct {
 	// (<kubelet root>/plugins/kubernetes.io/csi) scanned at node startup
 	// to rediscover already-staged volumes (see recoverStagedVolumesFromDisk).
 	StagingScanDir string
+
+	// KubeletRootDir is kubelet's --root-dir on the host, and KubeletRootMount
+	// is where this container mounts that same directory. When both are set,
+	// a publish target that is not mounted but holds files is moved into
+	// <root>/seaweedfs-quarantine on unpublish instead of failing every retry.
+	KubeletRootDir   string
+	KubeletRootMount string
 }
 
 func NewSeaweedFsDriver(name, filer, nodeID, endpoint, mountEndpoint string, enableAttacher bool) *SeaweedFsDriver {

@@ -358,7 +358,7 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		glog.Warningf("volume %s hasn't been published", volumeID)
 
 		// make sure there is no any garbage
-		if err := cleanupMountPoint(targetPath); err == nil {
+		if err := ns.unpublishTarget(targetPath, cleanupMountPoint); err == nil {
 			resetStatfsProbe(targetPath)
 		}
 
@@ -372,7 +372,7 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 	// place; a later successful NodePublishVolume can track the path anew.
 	// The per-volume mutex also excludes retryPublishPaths/recoverVolume.
 	vol.RemovePublishPath(targetPath)
-	if err := vol.Unpublish(targetPath); err != nil {
+	if err := ns.unpublishTarget(targetPath, vol.Unpublish); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 

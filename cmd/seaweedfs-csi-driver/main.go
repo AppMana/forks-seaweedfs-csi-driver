@@ -35,6 +35,8 @@ var (
 	dataCenter           = flag.String("dataCenter", "", "dataCenter this node is running in (locality-definition)")
 	dataLocalityStr      = flag.String("dataLocality", "", "which volume-nodes pods will use for activity (one-of: 'write_preferLocalDc'). Requires used locality-definitions to be set")
 	stagingScanDir       = flag.String("stagingScanDir", driver.DefaultStagingScanDir, "kubelet CSI plugins directory (<kubelet root>/plugins/kubernetes.io/csi) scanned at node startup to rediscover staged volumes; set it when kubelet runs with another --root-dir, empty disables the scan")
+	kubeletRootDir       = flag.String("kubeletRootDir", "", "kubelet --root-dir on the host; with kubeletRootMount, unpublish moves an unmounted nonempty target into <root>/seaweedfs-quarantine instead of failing")
+	kubeletRootMount     = flag.String("kubeletRootMount", "", "container path where kubeletRootDir is mounted as one volume")
 	topologyKeys         = flag.String("topologyKeys", "", "comma-separated node label keys reported as accessible topology, e.g. topology.kubernetes.io/zone")
 	dataLocality         datalocality.DataLocality
 	parsedMountExtraArgs []string
@@ -104,6 +106,8 @@ func main() {
 	drv.DataCenter = *dataCenter
 	drv.DataLocality = dataLocality
 	drv.StagingScanDir = *stagingScanDir
+	drv.KubeletRootDir = *kubeletRootDir
+	drv.KubeletRootMount = *kubeletRootMount
 	drv.TopologyKeys = driver.ParseTopologyKeys(*topologyKeys)
 
 	drv.Run()
