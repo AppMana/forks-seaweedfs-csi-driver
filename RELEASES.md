@@ -30,6 +30,19 @@ an option there), WinFsp 2.1.25156 and DLL `appmana-dll-2.1-066843359`.
 Compatibility: no request API or required flag changes; mount and node
 plugin roll independently.
 
+Qualification: CI run 40814065645 (race unit tests, native Windows tests);
+the 25 s lookup deadline checked end to end against a frozen local filer
+(EIO at 2.00 s with the deadline set to 2 s).
+
+| Image | Digest |
+| --- | --- |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.3` | `sha256:8fab7c631fb02cce83aec08a1f85ac747d907563b76a6ec79c0dab09b723002d` |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.3-linux-amd64` | `sha256:1d705a8a04daf2a938388d67e2fd74cda63f5162a4f6f91245f71fe3e93845f3` |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.3-windows-ltsc2022` | `sha256:f4585734626749c9b1fe7b4bf209e9662600dfce2567f7b2c78fce22e0e941c8` |
+| `seaweedfs-mount:v1.4.34-appmana.post.3` | `sha256:67d74e14ed568d0c044a155d3aa4d03b18d690f95bcda75fd63fa4d1cd38be9e` |
+| `seaweedfs-mount:v1.4.34-appmana.post.3-linux-amd64` | `sha256:5fe5609903f54d1bed0efe99a80ec45ac54279739ec839ca44039415b68213c9` |
+| `seaweedfs-mount:v1.4.34-appmana.post.3-windows-ltsc2022` | `sha256:3c7241992b830d3307980a4e1dec0343fa23dbd4bdcc45c514c52ccb6415fa80` |
+
 ## v1.4.34-appmana.post.2
 
 Source `73a931aa3eed8f1a13d61d0e062225ee4d3591aa`, candidate
