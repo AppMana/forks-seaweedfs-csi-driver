@@ -7,6 +7,29 @@ Each release is the exact images of one CI candidate (`build-images.yml`,
 Earlier releases (`v1.4.12-appmana.post.*`, `v1.4.26-appmana.post.*`)
 predate this file.
 
+## v1.4.34-appmana.post.3
+
+Source `fdf2deafba2cfe8555f362bea4421019d04c09a3`, candidate
+`candidate-fdf2deafba2cfe8555f362bea4421019d04c09a3-40814065645-1`. Linux
+mount images run weed 4.48 `4a80f9c984ac47697edcdbcdb49053a2a1660e32` with
+go-fuse `ee4fb2f73956e336d851e77993fcb3702e38e62c`; Windows mount images keep
+weed `17806ab0557444ce3f03cc62aec5a8768b4e1885` (go-fuse `ee4fb2f` only adds
+an option there), WinFsp 2.1.25156 and DLL `appmana-dll-2.1-066843359`.
+
+- Linux mounts answer namespace requests (lookup, attributes, create, rename,
+  readdir, xattrs) with EIO after 25 s (`-fuse.metadataRequestTimeout`);
+  data, sync and lock requests keep 60 s. An O_CREAT open holds the parent
+  directory lock across LOOKUP and CREATE, so two requests each answered just
+  inside 60 s could exceed the kernel's 120 s hung task window.
+- Node plugin quarantines a publish target that is not mounted but holds
+  files: with `--kubeletRootDir` and `--kubeletRootMount` (a mount of the
+  whole kubelet root, HostToContainer), unpublish renames it intact into
+  `<kubelet root>/seaweedfs-quarantine/<time>-<pod uid>-<pvc>` and succeeds.
+  Without both flags, unpublish still fails and keeps the data.
+
+Compatibility: no request API or required flag changes; mount and node
+plugin roll independently.
+
 ## v1.4.34-appmana.post.2
 
 Source `73a931aa3eed8f1a13d61d0e062225ee4d3591aa`, candidate
