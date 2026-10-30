@@ -48,8 +48,8 @@ an option there), WinFsp 2.1.25156 and DLL `appmana-dll-2.1-066843359`.
 - Linux mounts answer namespace requests (lookup, attributes, create, rename,
   readdir, xattrs) with EIO after 25 s (`-fuse.metadataRequestTimeout`);
   data, sync and lock requests keep 60 s. An O_CREAT open holds the parent
-  directory lock across LOOKUP and CREATE, and two requests each answered
-  just inside 60 s panicked appmana-031 through hung_task (2026-10-27).
+  directory lock across LOOKUP and CREATE, so two requests each answered just
+  inside 60 s could exceed the kernel's 120 s hung task window.
 - Node plugin quarantines a publish target that is not mounted but holds
   files: with `--kubeletRootDir` and `--kubeletRootMount` (a mount of the
   whole kubelet root, HostToContainer), unpublish renames it intact into
@@ -111,7 +111,7 @@ post.1 (for example weed 6a5705033, a2dcf6643, or the Windows image at
 
 Qualification: CI run 40558255116 (race unit tests; native Windows tests,
 including a real install of the pinned MSI through the mount service's
-installer on the hosted runner). Production canary: appmana-026.
+installer on the hosted runner).
 
 | Image | Digest |
 | --- | --- |
