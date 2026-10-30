@@ -17,11 +17,11 @@ env:
   # deployed release tag, including on reruns of the same source revision.
   # Promote qualified image digests separately without rebuilding them.
   IMAGE_TAG: candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-  # Platform-specific source pins preserve the qualified Linux binary while
-  # Windows receives its cache/namespace fixes. Keep Dockerfile defaults and the build-pin
+  # Per-platform forks-seaweedfs source pins; both are on the 4.51 line
+  # (merge/upstream-4.51). Keep Dockerfile defaults and the build-pin
   # contract aligned. Source qualification does not qualify rebuilt image bytes.
-  SEAWEEDFS_COMMIT: 4a80f9c984ac47697edcdbcdb49053a2a1660e32
-  SEAWEEDFS_WINDOWS_COMMIT: 17806ab0557444ce3f03cc62aec5a8768b4e1885
+  SEAWEEDFS_COMMIT: ecede7f04a07a166d1e3b0c2fdd0ea0b6d3909c6
+  SEAWEEDFS_WINDOWS_COMMIT: ecede7f04a07a166d1e3b0c2fdd0ea0b6d3909c6
 
 jobs:
   metadata:
