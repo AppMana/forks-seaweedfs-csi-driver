@@ -7,6 +7,35 @@ Each release is the exact images of one CI candidate (`build-images.yml`,
 Earlier releases (`v1.4.12-appmana.post.*`, `v1.4.26-appmana.post.*`)
 predate this file.
 
+## v1.4.34-appmana.post.4
+
+Source `ddc6149beb1f843fbc08621d2ecf61045a04fa0b`, candidate
+`candidate-ddc6149beb1f843fbc08621d2ecf61045a04fa0b-41098081458-1`. Linux and
+Windows mount images run weed 4.51 `1e38202609dc8fb39a77f1f72519ac7393efa79d`
+(`merge/upstream-4.51`) with go-fuse `ee4fb2f73956e336d851e77993fcb3702e38e62c`;
+Windows keeps WinFsp 2.1.25156 and DLL `appmana-dll-2.1-066843359`. The node
+plugin builds against the same weed API.
+
+- Windows mounts take the shared mount code of the 4.51 line: NT extended
+  attributes are stored as the entry's xattrs (the ones Linux mounts read),
+  and `-readOnly` refuses every mutation with EROFS.
+- Linux mounts carry upstream 4.51's mount changes merged with the 4.48 fork
+  fixes (25 s namespace deadline, 60 s data deadline, bounded write buffer).
+
+Compatibility: no request API or required flag changes; mount and node
+plugin roll independently.
+
+Qualification: CI run 41098081458 (race unit tests, native Windows tests);
+weed `1e3820260` passed the fork's storage reliability gates (large-disk
+regressions, VM fault gates) and the WinFsp build and test workflow.
+
+| Image | Digest |
+| --- | --- |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.4-linux-amd64` | `sha256:6c6b2db2ec5b4f6a27e24d5f373d77261206dfff23787eed2ccaefed72bcad55` |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.4-windows-ltsc2022` | `sha256:6787cd3944b4c458cff142ae711f40b6074038695468f4067ad664b63aad08f3` |
+| `seaweedfs-mount:v1.4.34-appmana.post.4-linux-amd64` | `sha256:28656047de8158c3620a47c425357661e748bc615d80e3cf3ad07fe5192e1ef0` |
+| `seaweedfs-mount:v1.4.34-appmana.post.4-windows-ltsc2022` | `sha256:3c1387cb083ff882088181e0c1fc48332ea999283e58e858f0b5051a5781d840` |
+
 ## v1.4.34-appmana.post.3
 
 Source `fdf2deafba2cfe8555f362bea4421019d04c09a3`, candidate
