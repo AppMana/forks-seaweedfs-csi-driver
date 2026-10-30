@@ -91,4 +91,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-replace github.com/seaweedfs/seaweedfs => github.com/AppMana/forks-seaweedfs v0.0.0-20261030030004-ecede7f04a07
+replace github.com/seaweedfs/seaweedfs => github.com/AppMana/forks-seaweedfs v0.0.0-20261030060114-1e38202609dc
