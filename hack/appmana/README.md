@@ -1,67 +1,61 @@
-# AppMana kind + QEMU SeaweedFS CSI lab scripts
+# kind and QEMU Windows CSI lab scripts
 
-Local e2e verification for the Windows port of the SeaweedFS CSI driver
-(branch `appmana/windows-v1.4.12`). The lab is the same kind cluster plus
-QEMU Windows worker used by the calico fork; bring it up per
-`../../../forks-calico-windows-ipv6/docs/kind-qemu-calico-validation.md`
-(kind cluster `appmana-calico`, apiserver `10.2.0.55:6443`, Windows worker
-`appmana-000` at `10.2.0.180`). Calico and kube-proxy-windows must already
-be healthy there; their preflight is a precondition for ours.
+End-to-end checks of the Windows CSI driver on a kind cluster plus a QEMU
+Windows worker: the kind and QEMU lab of the Calico fork
+(`forks-calico-windows-ipv6`, its `docs/kind-qemu-calico-validation.md`).
+Calico and kube-proxy-windows must already be healthy there; their preflight
+is a precondition for these scripts. The digest-pinned Labcontainers lab in
+`test/kubernetes_lab` (see [AGENTS.md](../../AGENTS.md)) replaces this lab for
+release checks.
 
 ## Scripts
 
-- `deploy-seaweedfs-kind.sh` - all-in-one SeaweedFS pod
-  (`weed server -filer -master.volumeSizeLimitMB=64 -volume.max=10`,
-  hostNetwork on a kind node so the filer HTTP and gRPC ports are reachable
-  from the QEMU VM through the existing forwarding rules). Prints
-  `FILER=<host:port>`. `--filer HOST:PORT` skips the deploy and only
-  verifies reachability from inside the cluster.
-- `deploy-csi-driver-kind.sh` - StorageClass `seaweedfs-storage`, CSIDriver,
-  RBAC, controller (provisioner/attacher/resizer sidecars), linux
-  `seaweedfs-mount`/`seaweedfs-node` DaemonSets (kubelet root
-  `/var/lib/kubelet`), and the Windows HostProcess DaemonSets (kubelet root
-  `C:\var\lib\kubelet`, WinFsp installed by the mount image's
-  initContainer). Requires `--csi-image`, `--mount-image`, `--filer`.
-- `check-kind-qemu-csi-ready.sh` - preflight: DaemonSets + controller
-  Ready, `csinode appmana-000` lists the driver, WinFsp.Launcher running,
-  mount supervisor and CSI plugin sockets present on the VM. Emits
-  `key=True/False` lines; any False is a bootstrap failure, not a
-  health-matrix result.
-- `storage-health-check.sh` - the matrix: RWX PVC bind, cross-OS
-  write/read with sha256 equality in both directions, concurrent cross-OS
-  append integrity, unmount cleanup (no leftover reparse point, no orphan
-  `weed.exe`), and remount of prior data. `--quick` runs only PVC bind plus
-  the cross-OS write/read tests; `--skip-cross-os` runs linux-only.
-- `run-kind-qemu-csi-resilience.sh` - sequenced drills against a long-lived
-  canary volume: node-plugin pod delete, `seaweedfs-mount.exe` supervisor
-  kill, kubelet restart; each followed by `storage-health-check.sh --quick`.
-- `run-kind-qemu-storage-e2e.sh` - orchestrator: forwarding rules + calico
-  preflight (from the calico repo, env-overridable via `FORWARDING_SCRIPT`
-  / `PREFLIGHT_SCRIPT`), deploy SeaweedFS, deploy CSI driver, CSI
-  preflight, health matrix. `RESILIENCE=true` appends the drills.
+- `deploy-seaweedfs-kind.sh`: an all-in-one SeaweedFS pod
+  (`weed server -filer -master.volumeSizeLimitMB=64 -volume.max=10`) on host
+  networking on a kind node, so the filer HTTP and gRPC ports are reachable
+  from the QEMU VM. Prints `FILER=<host:port>`. `--filer HOST:PORT` skips the
+  deploy and only checks reachability from inside the cluster.
+- `deploy-csi-driver-kind.sh`: StorageClass `seaweedfs-storage`, CSIDriver,
+  RBAC, controller with provisioner, attacher and resizer sidecars, the Linux
+  `seaweedfs-mount` and `seaweedfs-node` DaemonSets (kubelet root
+  `/var/lib/kubelet`) and the Windows HostProcess DaemonSets (kubelet root
+  `C:\var\lib\kubelet`; this script still installs WinFsp from an
+  initContainer). Requires `--csi-image`, `--mount-image` and `--filer`.
+- `check-kind-qemu-csi-ready.sh`: preflight. DaemonSets and controller Ready,
+  the Windows node's `csinode` lists the driver, WinFsp.Launcher running, the
+  mount supervisor and CSI plugin sockets present on the VM. Prints
+  `key=True/False` lines; any False is a bootstrap failure, not a health
+  result.
+- `storage-health-check.sh`: RWX PVC bind, cross-OS write and read with
+  SHA-256 equality both ways, concurrent cross-OS append integrity, unmount
+  cleanup (no leftover reparse point or orphan `weed.exe`) and remount of
+  earlier data. `--quick` runs PVC bind and the cross-OS write and read only;
+  `--skip-cross-os` runs Linux only.
+- `run-kind-qemu-csi-resilience.sh`: on a long-lived canary volume, deletes
+  the node plugin pod, kills `seaweedfs-mount.exe` and restarts kubelet, each
+  followed by `storage-health-check.sh --quick`.
+- `run-kind-qemu-storage-e2e.sh`: forwarding rules and Calico preflight (from
+  the Calico repository, overridable with `FORWARDING_SCRIPT` and
+  `PREFLIGHT_SCRIPT`), SeaweedFS deploy, CSI deploy, CSI preflight and the
+  health matrix. `RESILIENCE=true` adds the resilience drills.
 
-## Normal loop
+Environment: `KUBECONFIG` (the lab kubeconfig), `LAB_CONTEXT` (the kind
+context the scripts insist on), `WINDOWS_NODE` (the QEMU worker's node name)
+and `CALICO_HACK_DIR` (the Calico fork's `hack/appmana`, by default a sibling
+checkout). The deploy, preflight, health and resilience scripts refuse to run
+unless the current context is `LAB_CONTEXT`.
+
+## Usage
 
 ```bash
-# 1. Bring up the kind + QEMU lab (see the calico validation doc above).
-# 2. Build/push candidate images via the fork CI (one manifest-list tag
-#    serves linux and windows ltsc2022).
-# 3. Run the full flow against the candidate tag:
+# 1. Bring up the kind and QEMU lab from the Calico fork.
+# 2. Build candidate images through this repository's CI.
 CSI_IMAGE=ghcr.io/appmana/seaweedfs-csi-driver:<tag> \
 MOUNT_IMAGE=ghcr.io/appmana/seaweedfs-mount:<tag> \
 hack/appmana/run-kind-qemu-storage-e2e.sh
 
-# 4. Resilience drills on top:
 RESILIENCE=true CSI_IMAGE=... MOUNT_IMAGE=... hack/appmana/run-kind-qemu-storage-e2e.sh
 
-# 5. Mocked script tests (no kind/QEMU needed):
+# Mocked script tests, no kind or QEMU needed:
 hack/appmana/tests/run-appmana-script-tests.sh
 ```
-
-## Safety
-
-These scripts must never target the production cluster. They default to
-`KUBECONFIG=/tmp/appmana-calico-kind/kubeconfig`, and the deploy, preflight,
-health, and resilience scripts refuse to run unless
-`kubectl config current-context` is the kind lab context
-`kind-appmana-calico`.
