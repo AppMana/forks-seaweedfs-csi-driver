@@ -20,8 +20,8 @@ env:
   # Per-platform forks-seaweedfs source pins; both are on the 4.51 line
   # (merge/upstream-4.51). Keep Dockerfile defaults and the build-pin
   # contract aligned. Source qualification does not qualify rebuilt image bytes.
-  SEAWEEDFS_COMMIT: 1e38202609dc8fb39a77f1f72519ac7393efa79d
-  SEAWEEDFS_WINDOWS_COMMIT: 1e38202609dc8fb39a77f1f72519ac7393efa79d
+  SEAWEEDFS_COMMIT: 25c37a9171aa910815181839c1003f70d30bd84f
+  SEAWEEDFS_WINDOWS_COMMIT: 25c37a9171aa910815181839c1003f70d30bd84f
 
 jobs:
   metadata:
