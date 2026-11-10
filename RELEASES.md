@@ -7,6 +7,46 @@ Each release is the exact images of one CI candidate (`build-images.yml`,
 Earlier releases (`v1.4.12-appmana.post.*`, `v1.4.26-appmana.post.*`)
 predate this file.
 
+## v1.4.34-appmana.post.5
+
+Source `181056768d3cf432e99820c63ff987eee0e98cdc`, candidate
+`candidate-181056768d3cf432e99820c63ff987eee0e98cdc-42881415825-1`.
+Linux and Windows mount images run weed 4.51
+`05ee7d564ab5be89a79ae977cb3a7cc571e38340` with go-fuse
+`ee4fb2f73956e336d851e77993fcb3702e38e62c`. Windows keeps WinFsp 2.1.25156
+and DLL `appmana-dll-2.1-066843359`
+(SHA256 `082f0cedc800a7ea29f726b9d3116358d20278c0de64f21ccb1c3e14d68c9d9e`).
+The node plugin builds against the same weed API.
+
+Shared disk-cache maintenance runs asynchronously and coalesces requests.
+One directory inventory accounts for usage and evicts to a 90% low watermark;
+foreground reads no longer scan and sort a full cache on every insertion.
+Concurrent writers reserve space, and periodic reconciliation accounts for
+other mount processes sharing the directory. Shutdown joins maintenance
+without holding the tiered cache lock.
+
+Compatibility: no protobuf, required flag or cache-format changes; mount and
+node plugin roll independently. Existing cached chunks remain usable.
+
+Qualification: image build 42881415825 passed race and native Windows tests.
+Weed passed Windows workflow 42880953470 and storage reliability 42880965277
+with explicit upgrade/rollback baseline
+`6564984368e8f3d1bd065df6fbbcf3bce12bb067`. Controlled full-cache native Windows
+reads improved from 8–11 MiB/s to 102–117 MiB/s with matching payload hashes.
+The exact four published images passed retained-cluster CSI recovery
+qualification: Git LFS, native write/persistence, mixed Linux/Windows I/O,
+Linux supervisor restart, remount, Windows reboot and sandbox teardown.
+The retained cluster used verified offline image imports after fresh-bootstrap
+fixture provisioning failures; this is recovery qualification, not a claim of
+fresh bootstrap or full native WinFsp conformance.
+
+| Image | Digest |
+| --- | --- |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.5-linux-amd64` | `sha256:f53266296014d00993bdc72953995151e421d88e4d9ab31019869773985b803e` |
+| `seaweedfs-csi-driver:v1.4.34-appmana.post.5-windows-ltsc2022` | `sha256:0cf147b7ada0d2ce8d53be5ea2c06d62c4b64bb896c58b46d47f3ae2af074fec` |
+| `seaweedfs-mount:v1.4.34-appmana.post.5-linux-amd64` | `sha256:95f200923765dcac56c0b6452187c2abe43f2073d6dad13e4af35fc33065f34f` |
+| `seaweedfs-mount:v1.4.34-appmana.post.5-windows-ltsc2022` | `sha256:7e50db8f820a94308b1ff16daa7837c3e6b0007b915be48b6d84dd24a18337e4` |
+
 ## v1.4.34-appmana.post.4
 
 Source `ddc6149beb1f843fbc08621d2ecf61045a04fa0b`, candidate
